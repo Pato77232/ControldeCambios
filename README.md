@@ -1,6 +1,6 @@
-# ChangeFlow · Control de cambios de ProyectoBusesUTA
+# Transviajes · Control de cambios de ProyectoBusesUTA
 
-Aplicación académica de la UTA con frontend HTML/CSS/JavaScript, API Node.js y base SQLite. Incluye login, permisos por perfil, análisis del CCC, votos individuales y resolución formal. El backend utiliza módulos de Node.js, sin dependencias externas.
+Aplicación académica de la UTA con frontend HTML/CSS/JavaScript, API Node.js y base SQLite. Incluye login, permisos por perfil, análisis y resolución formal a cargo de un único integrante del CCC. El backend utiliza módulos de Node.js, sin dependencias externas.
 
 ## Iniciar
 
@@ -20,18 +20,25 @@ El frontend y la API se sirven desde el mismo proceso. Abrir `index.html` direct
 
 ## Cuentas iniciales
 
-Al crear una base vacía se generan estas cuatro cuentas, todas con la contraseña inicial definida en `SEED_PASSWORD`:
+Al crear una base vacía se generan cinco cuentas personales. La contraseña inicial se define en `SEED_PASSWORD` dentro de `.env`:
 
-| Cuenta | Perfil | Acceso |
-|---|---|---|
-| `ana@changeflow.local` | Usuario final | Crea peticiones de usuario, consulta y edita las suyas antes del análisis. |
-| `diego@changeflow.local` | Desarrollador | Crea peticiones técnicas, consulta y edita las suyas antes del análisis. |
-| `carlos@changeflow.local` | CCC | Consulta todas las peticiones, realiza análisis, registra su voto y resoluciones. |
-| `maria@changeflow.local` | CCC | Los mismos permisos que Carlos, con sesión y voto independientes. |
+| Cuenta | Perfil |
+|---|---|
+| `leslie@uta.edu.ec` | Desarrollador |
+| `david@uta.edu.ec` | Único miembro del CCC |
+| `edwin@uta.edu.ec` | Desarrollador |
+| `pablo@uta.edu.ec` | Desarrollador |
+| `shirley@uta.edu.ec` | Desarrollador |
 
-La contraseña inicial de las cuentas se configura en `SEED_PASSWORD` dentro de tu `.env` local. `.env` y la base están excluidos de Git y no son accesibles desde el servidor de archivos.
+Para aplicar este equipo a una base existente y establecer la contraseña de `.env`:
 
-Las cuentas se crean solo una vez. Cambiar `SEED_PASSWORD` no cambia las contraseñas de una base existente. No hay registro público, recuperación de contraseñas ni administración de cuentas en la interfaz.
+```bash
+npm run accounts:sync
+```
+
+El comando activa estas cinco cuentas, asigna únicamente a David el rol CCC y desactiva las demás. No elimina solicitudes ni identidades históricas. Revoca las sesiones anteriores, por lo que todos deben iniciar sesión nuevamente. Las peticiones pendientes a cargo de un antiguo integrante requieren un nuevo análisis; el anterior se conserva en `previousAnalyses` y el cambio queda registrado en el historial. Las resoluciones ya finalizadas no se modifican.
+
+La contraseña no se incluye en Git. Cambiar `.env` por sí solo no cambia contraseñas existentes: el comando anterior debe ejecutarse deliberadamente. No hay registro público de cuentas ni recuperación de contraseñas en la interfaz.
 
 ## Flujo y permisos
 
@@ -39,30 +46,27 @@ Las cuentas se crean solo una vez. Cambiar `SEED_PASSWORD` no cambia las contras
 Formulario público → Petición del usuario final (sin cuenta)
 Login → Petición del usuario final o del desarrollador
       → Análisis del CCC
-      → Voto individual de cada participante
       → Resolución: aprobado / condicionado / rechazado / más información
 ```
 
 Con sesión iniciada, el nombre y correo del solicitante proceden de su sesión. Sin cuenta, el usuario final proporciona su nombre y correo, que se registran como datos de contacto sin verificar. El correo no vincula la solicitud a una cuenta existente. Un usuario final no puede enviar una petición con perfil de desarrollador. Un miembro del CCC puede crear una petición, pero otro integrante debe analizarla y decidir sobre ella.
 
-Cada solicitante ve exclusivamente sus peticiones. El CCC puede consultar todas. La edición y eliminación se permiten solo al dueño, mientras la petición esté pendiente y aún no tenga análisis. Las restricciones se validan en el servidor, incluso si alguien intenta saltarse los controles de la interfaz.
+Cada solicitante con perfil de usuario final ve exclusivamente sus peticiones. El desarrollador consulta las propias y las presentadas sin cuenta. El CCC puede consultar todas. La edición y eliminación se permiten solo al dueño, mientras la petición esté pendiente y aún no tenga análisis. Las restricciones se validan en el servidor, incluso si alguien intenta saltarse los controles de la interfaz.
 
 ### Análisis
 
-El CCC registra impacto, impacto técnico, riesgos, viabilidad, esfuerzo, recursos, consideraciones y prioridad. El servidor obtiene la identidad del analista y la fecha. Actualizar el análisis invalida los votos previos y exige votar nuevamente.
+El CCC registra impacto, impacto técnico, riesgos, viabilidad, esfuerzo, recursos, consideraciones y prioridad. El servidor obtiene la identidad del analista y la fecha. El primer análisis asigna la petición a ese integrante, que será responsable de revisarla y resolverla. Otro integrante puede consultar el expediente, pero no modificar su análisis ni registrar su resolución.
 
-### Votos y resolución
+### Resolución por el responsable del análisis
 
-Cada integrante inicia sesión y registra **su propio voto**. Nadie puede registrar el de otra persona. Se seleccionan uno o dos participantes para la resolución; todos deben haber votado y debe incluirse a todos los que ya emitieron un voto vigente. El responsable de registrar la resolución debe ser uno de ellos. El solicitante queda excluido por su ID de cuenta, no por comparar nombres.
-
-Con un participante, la resolución coincide con su voto. Con dos, requiere unanimidad; ante desacuerdo solo se permite **Más información**. El servidor comprueba los votos almacenados, no acepta votos inventados en el formulario de resolución.
+El mismo integrante del CCC que guardó el análisis registra la decisión final, su motivo y las condiciones cuando corresponda. No hay votaciones ni selección de participantes. El servidor comprueba la identidad autenticada y que el análisis pertenece al responsable; ningún integrante puede evaluar o resolver su propia petición.
 
 - **Aprobado:** finaliza la revisión; no significa que el cambio esté implementado.
 - **Aprobado con condiciones:** exige un texto con las restricciones o requisitos y finaliza la revisión.
 - **Rechazado:** exige motivo y finaliza la revisión.
-- **Más información:** conserva la resolución y mantiene abierto el expediente. El solicitante puede responder desde el detalle; su respuesta requiere un nuevo análisis y nuevos votos.
+- **Más información:** conserva la resolución y mantiene abierto el expediente. El solicitante puede responder desde el detalle; su respuesta requiere un nuevo análisis del mismo responsable.
 
-El análisis, cada voto y las resoluciones se incorporan al historial. Cada resolución guarda la copia del análisis utilizado, participantes, votos, condiciones, responsable autenticado y fecha del servidor. Las resoluciones anteriores permanecen consultables.
+El análisis y las resoluciones se incorporan al historial. Cada resolución guarda la copia del análisis utilizado, las condiciones, el responsable autenticado y la fecha del servidor. Las votaciones de expedientes antiguos se conservan como datos históricos, sin intervenir en las nuevas resoluciones. Las resoluciones anteriores permanecen consultables.
 
 El botón **Actualizar** consulta cambios de otros participantes. Cada petición tiene una revisión numérica: un intento de guardar desde una versión antigua recibe un conflicto y recarga el expediente para evitar sobrescribir cambios ajenos. Actualizar la vista descarta los campos que aún no se hayan guardado.
 
@@ -104,11 +108,10 @@ Las rutas de login y `POST /api/public/requests` no requieren sesión; las demá
 | `PATCH /api/requests/:id` | Editar una petición propia antes del análisis. |
 | `DELETE /api/requests/:id` | Eliminar una petición propia aún sin analizar. |
 | `POST /api/requests/:id/analysis` | Registrar análisis del CCC y renovar la etapa de votación. |
-| `POST /api/requests/:id/vote` | Voto del miembro autenticado. |
-| `POST /api/requests/:id/resolution` | Resolución con `members`, `decision`, `decisionNote` y `conditions` si corresponde. |
+| `POST /api/requests/:id/resolution` | Resolución con `decision`, `decisionNote` y `conditions` si corresponde; solo por el analista autenticado. |
 | `POST /api/requests/:id/clarification` | Respuesta del solicitante: `note`. |
 
-No hay una ruta para reemplazar todo el historial o alterar libremente el estado. Código, identidad, roles, fecha, estado y votos de otros integrantes no se toman de campos enviados por el cliente.
+No hay una ruta para reemplazar todo el historial o alterar libremente el estado. Código, identidad, roles, fecha, estado y responsable del análisis no se toman de campos enviados por el cliente.
 
 ## Almacenamiento y sesiones
 
@@ -118,23 +121,23 @@ Las contraseñas se almacenan mediante scrypt con sal independiente. Las sesione
 
 `COOKIE_SECURE=true` activa la cookie Secure para servir la aplicación mediante HTTPS. El servidor enlaza a `127.0.0.1` por defecto. No incluye infraestructura de despliegue, HTTPS, recuperación de cuentas ni administración empresarial de usuarios.
 
-Los datos antiguos de `localStorage` no se borran ni se importan automáticamente: no tienen identidad autenticada y no se pueden convertir sus nombres en autorizaciones reales. La base del servidor empieza vacía. Para verificar visualmente esta versión se creó una petición claramente marcada como **Demostración**, con aprobación condicionada y votos de ambas cuentas del CCC.
+Los datos antiguos de `localStorage` no se borran ni se importan automáticamente: no tienen identidad autenticada y no se pueden convertir sus nombres en autorizaciones reales. La base del servidor empieza vacía. Para verificar visualmente esta versión se creó una petición claramente marcada como **Demostración**, con aprobación condicionada. Los registros de la versión anterior conservan su historial.
 
 Los adjuntos continúan guardando únicamente nombres; no hay subida ni descarga real de archivos. La base contiene datos de demostración y el historial no es una auditoría externa inmutable.
 
 ## Validación
 
-`npm test` utiliza una base temporal y servidores locales efímeros. Comprueba login, sesión y logout; intentos fallidos; CSRF; archivos privados; perfiles y visibilidad; validación de campos; identidad no falsificable; edición y eliminación; códigos; análisis previo; votos independientes; aprobación simple y condicionada; rechazo; desacuerdos; solicitud y respuesta de información; revisión independiente; conflictos de versiones; y persistencia al reiniciar.
+`npm test` utiliza una base temporal y servidores locales efímeros. Comprueba login, sesión y logout; intentos fallidos; CSRF; archivos privados; perfiles y visibilidad; validación de campos; identidad no falsificable; edición y eliminación; códigos; análisis previo; responsable único; aprobación simple y condicionada; rechazo; bloqueo de resolución por otro integrante; solicitud y respuesta de información; revisión independiente; conflictos de versiones; y persistencia al reiniciar.
 
-La prueba del cliente verifica recuperación de sesión, formulario por perfil, identidad de solo lectura, rutas protegidas y envío de votos/resoluciones a la API. La revisión en navegador completó solicitud, análisis, dos sesiones del CCC, votos separados y aprobación con condiciones.
+La prueba del cliente verifica recuperación de sesión, formulario por perfil, identidad de solo lectura, rutas protegidas y resolución por el analista autenticado. La revisión comprueba que no existen controles de votación ni selección de participantes.
 
-Para demostrarlo manualmente: entra como Ana y crea una solicitud; entra como Carlos para analizarla y votar; entra como María para votar y resolver. Para simular participantes simultáneos utiliza perfiles de navegador distintos, ya que las pestañas del mismo perfil comparten la cookie de sesión.
+Para demostrarlo manualmente: presenta una solicitud sin cuenta o entra como Ana para crearla; entra como Carlos para analizarla y registrar directamente la resolución. María podrá consultar esa petición, pero no analizarla ni cerrarla. Para simular participantes simultáneos utiliza perfiles de navegador distintos, ya que las pestañas del mismo perfil comparten la cookie de sesión.
 
-## Diseño BusesUTA
+## Diseño Transviajes
 
-Los cuatro formularios utilizan la cabecera BusesUTA, las etapas Solicitud / Análisis / Decisión y las guías de los mockups. La guía lateral pasa debajo del formulario en pantallas pequeñas. Las áreas de texto incluyen contadores y la resolución muestra los resúmenes de solicitud y análisis.
+Los cuatro formularios utilizan la cabecera Transviajes, las etapas Solicitud / Análisis / Decisión y las guías de los mockups. La guía lateral pasa debajo del formulario en pantallas pequeñas. Las áreas de texto incluyen contadores y la resolución muestra los resúmenes de solicitud y análisis.
 
-El tipo de solicitud se conserva en el servidor. El desarrollador puede indicar una prioridad propuesta; el CCC conserva la responsabilidad de establecer la prioridad durante el análisis. Se mantienen los campos requeridos por el flujo existente, los votos individuales y las restricciones por perfil. Los adjuntos siguen registrando solo nombres. Los botones de envío guardan en el servidor; no se simulan borradores ni cargas de archivos.
+El tipo de solicitud se conserva en el servidor. El desarrollador puede indicar una prioridad propuesta; el CCC conserva la responsabilidad de establecer la prioridad durante el análisis. Se mantienen los campos requeridos por el flujo existente, el responsable único y las restricciones por perfil. Los adjuntos siguen registrando solo nombres. Los botones de envío guardan en el servidor; no se simulan borradores ni cargas de archivos.
 
 ## Solicitudes sin cuenta
 
@@ -143,3 +146,15 @@ Al abrir la aplicación sin sesión se muestra directamente el formulario de usu
 El visitante indica nombre y correo, completa el formulario y recibe un código como comprobante. Su solicitud queda disponible para el CCC. No se crea una cuenta ni una sesión, y no se permite consultar, editar o eliminar solicitudes públicas desde el navegador anónimo. El código no es una credencial de acceso. No se envían correos automáticos ni se verifica la titularidad del correo en este prototipo.
 
 El endpoint público admite únicamente solicitudes de usuario final y no devuelve el expediente ni el listado. Valida campos, origen y contenido JSON, y limita los intentos a 20 por hora por dirección IP. La migración a la versión 2 permite solicitudes sin propietario de cuenta conservando los registros y el contador de códigos anteriores.
+
+## Identidad visual
+
+La aplicación de control de cambios se presenta como **Transviajes**. El login utiliza una composición de dos paneles, fondo azul sin fotografías, acceso mediante correo y contraseña, botón para mostrar u ocultar la contraseña y registro de solicitudes de usuario final sin cuenta. Las solicitudes anteriores conservan el nombre de proyecto con el que se registraron; las nuevas utilizan Transviajes.
+
+### Recepción de solicitudes públicas en el panel técnico
+
+Las solicitudes enviadas sin cuenta aparecen en el panel y listado de los desarrolladores, con acceso de consulta al expediente. La edición y eliminación siguen reservadas al propietario de una cuenta, y el análisis y la resolución al integrante responsable del CCC. Las solicitudes privadas de otras cuentas no se incorporan al panel del desarrollador.
+
+El panel autenticado se actualiza al regresar a la pestaña, al entrar al panel o listado y cada 15 segundos mientras está visible. No se recargan formularios en edición. El envío público muestra los errores de forma persistente en el formulario y conserva los datos para corregirlos.
+
+La configuración del equipo y las cuentas desactivadas se verifican con pruebas de login de las cinco cuentas, rechazo de cuentas antiguas, permisos del CCC, preservación del análisis anterior e idempotencia del comando de sincronización.

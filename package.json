@@ -3,10 +3,13 @@
   "version": "2.0.0",
   "private": true,
   "description": "Gestión de cambios con autenticación y resolución del CCC",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "start": "node --env-file-if-exists=.env backend/server.cjs",
     "test": "node --test tests/backend.test.cjs && node tests/flow.cjs",
-    "check": "node --check js/app.js && node --check backend/server.cjs"
+    "check": "node --check js/app.js && node --check backend/server.cjs",
+    "accounts:sync": "node --env-file-if-exists=.env backend/configure-team.cjs"
   }
 }

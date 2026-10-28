@@ -9,12 +9,12 @@ function verifyPassword(password, hash) {
   const [salt,key]=hash.split(':');
   return timingSafeEqual(Buffer.from(key,'hex'),scryptSync(password,salt,64));
 }
+const { TEAM } = require('./team.cjs');
 const digest = value => createHash('sha256').update(value).digest('hex');
-function seedUsers(db, password) {
+function seedUsers(db, password, users = TEAM) {
   if(db.prepare('SELECT COUNT(*) AS n FROM users').get().n) return;
   if(!password || password.length<12) throw Error('Define SEED_PASSWORD con al menos 12 caracteres para crear las cuentas iniciales.');
-  const users=[['user-ana','Ana Martínez','ana@changeflow.local','usuario'],['expert-diego','Diego Sánchez','diego@changeflow.local','experto'],['ccc-carlos','Carlos Pérez','carlos@changeflow.local','ccc'],['ccc-maria','María López','maria@changeflow.local','ccc']];
-  const statement=db.prepare('INSERT INTO users VALUES(?,?,?,?,?)');
+  const statement=db.prepare('INSERT INTO users(id,name,email,role,password_hash) VALUES(?,?,?,?,?)');
   db.exec('BEGIN');
   try { for(const u of users) statement.run(...u,hashPassword(password)); db.exec('COMMIT'); }
   catch(e){db.exec('ROLLBACK');throw e;}
@@ -28,6 +28,6 @@ function createSession(db,userId) {
 function getSession(db,req) {
   const token=(req.headers.cookie || '').split(';').map(x=>x.trim()).find(x=>x.startsWith('changeflow_session='))?.slice('changeflow_session='.length);
   if(!token || !/^[a-f0-9]{64}$/.test(token)) return null;
-  return db.prepare('SELECT s.token_hash,s.csrf,u.id,u.name,u.email,u.role FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires>?').get(digest(token),Date.now()) || null;
+  return db.prepare('SELECT s.token_hash,s.csrf,u.id,u.name,u.email,u.role FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires>? AND u.active=1').get(digest(token),Date.now()) || null;
 }
 module.exports={publicUser,hashPassword,verifyPassword,seedUsers,createSession,getSession};

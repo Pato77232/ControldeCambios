@@ -19,16 +19,16 @@ function getRequest(db,id,user) {
   const row=db.prepare('SELECT document FROM requests WHERE id=?').get(Number(id.slice(4)));
   if(!row) fail(404,'Solicitud no encontrada.');
   const r=JSON.parse(row.document);
-  if(user.role!=='ccc' && r.ownerId!==user.id) fail(403,'No tienes acceso a esta solicitud.');
+  if(user.role!=='ccc' && !(user.role==='experto' && r.submittedWithoutAccount===true && r.ownerId===null) && r.ownerId!==user.id) fail(403,'No tienes acceso a esta solicitud.');
   return r;
 }
 function snapshot(db,user) {
-  const rows=user.role==='ccc' ? db.prepare('SELECT document FROM requests ORDER BY id').all() : db.prepare('SELECT document FROM requests WHERE owner_id=? ORDER BY id').all(user.id);
+  const rows=user.role==='ccc' ? db.prepare('SELECT document FROM requests ORDER BY id').all() : user.role==='experto' ? db.prepare("SELECT document FROM requests WHERE owner_id=? OR (owner_id IS NULL AND json_extract(document,'$.submittedWithoutAccount')=1) ORDER BY id").all(user.id) : db.prepare('SELECT document FROM requests WHERE owner_id=? ORDER BY id').all(user.id);
   const seq=db.prepare("SELECT seq FROM sqlite_sequence WHERE name='requests'").get();
   return {nextId:Number(seq?.seq || 0)+1,requests:rows.map(x=>JSON.parse(x.document))};
 }
-function committee(db){return db.prepare("SELECT id,name,email,role FROM users WHERE role='ccc' ORDER BY id").all().map(publicUser);}
-function authorizeCommittee(r,user){if(user.role!=='ccc')fail(403,'Solo el CCC puede realizar esta acción.');if(r.ownerId===user.id)fail(403,'No puedes evaluar ni resolver tu propia solicitud.');if(!open(r))fail(409,'Esta solicitud ya tiene una resolución definitiva.');}
+function committee(db){return db.prepare("SELECT id,name,email,role FROM users WHERE role='ccc' AND active=1 ORDER BY id").all().map(publicUser);}
+function authorizeCommittee(r,user){if(user.role!=='ccc')fail(403,'Solo el CCC puede realizar esta acción.');if(r.ownerId===user.id)fail(403,'No puedes evaluar ni resolver tu propia solicitud.');if(!open(r))fail(409,'Esta solicitud ya tiene una resolución definitiva.');const reviewer=r.reviewerId || r.analysis?.analystId;if(reviewer && reviewer!==user.id)fail(403,'Esta petición está a cargo de otro integrante del CCC.');}
 function checkRevision(r,data){if(data.revision!==r.revision)fail(409,'La solicitud cambió. Actualiza el expediente antes de guardar.');}
 function history(r,user,note){r.history.push({status:r.status,date:new Date().toISOString(),responsible:user.name,responsibleId:user.id,note});}
 function save(db,r){r.revision++;db.prepare('UPDATE requests SET document=? WHERE id=?').run(JSON.stringify(r),Number(r.id.slice(4)));return r;}
@@ -66,7 +66,7 @@ function createRequest(db,user,data) {
   const date=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Guayaquil',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const fields=requestFields(data,kind,date);
   const inserted=db.prepare('INSERT INTO requests(owner_id,document) VALUES(?,?)').run(user.id,'{}');
-  const r={...fields,id:`SCR-${String(inserted.lastInsertRowid).padStart(4,'0')}`,date,name:user.name,email:user.email,ownerId:user.id,...(guest?{submittedWithoutAccount:true}:{}),requesterType:kind,priority:'Media',status:'Pendiente',revision:0,history:[],resolutions:[],committeeVotes:[]};
+  const r={...fields,id:`SCR-${String(inserted.lastInsertRowid).padStart(4,'0')}`,date,name:user.name,email:user.email,ownerId:user.id,...(guest?{submittedWithoutAccount:true}:{}),requesterType:kind,priority:'Media',status:'Pendiente',revision:0,history:[],resolutions:[]};
   history(r,user,'Solicitud registrada.');save(db,r);return r;
 }
 function mutate(db,id,action,user,data) {
@@ -76,7 +76,8 @@ function mutate(db,id,action,user,data) {
     if(r.status!=='Más información')fail(409,'No hay una solicitud de información pendiente.');
     const note=text(data,'note',true);
     (r.clarifications ||= []).push({note,responsible:user.name,date:new Date().toISOString()});
-    r.analysis=null;r.committeeVotes=[];r.status='Pendiente';history(r,user,'Información adicional: '+note);
+    r.reviewerId ||= r.analysis?.analystId;
+    r.analysis=null;r.status='Pendiente';history(r,user,'Información adicional: '+note);
   } else if(action==='edit'||action==='delete') {
     if(r.ownerId!==user.id)fail(403,'Solo el solicitante puede modificar esta petición.');
     if(r.analysis||r.status!=='Pendiente')fail(409,'La petición está bloqueada porque ya fue analizada.');
@@ -88,28 +89,16 @@ function mutate(db,id,action,user,data) {
       const analysis={};
       for(const k of ['impact','technicalImpact','risks','feasibility','effort','resources','considerations','priority'])analysis[k]=text(data,k,true);
       option(analysis.impact,['Bajo','Medio','Alto'],'un impacto');option(analysis.feasibility,['Viable','Viable con condiciones','No viable'],'una viabilidad');option(analysis.priority,PRIORITIES,'una prioridad');
-      r.analysis={...analysis,analyst:user.name,analystId:user.id,date:new Date().toISOString()};r.priority=analysis.priority;r.committeeVotes=[];r.status='Pendiente';history(r,user,'Análisis del CCC actualizado. Los votos anteriores deben renovarse.');
+      r.analysis={...analysis,analyst:user.name,analystId:user.id,date:new Date().toISOString()};r.reviewerId=user.id;r.priority=analysis.priority;r.status='Pendiente';history(r,user,'Análisis registrado por el responsable del CCC.');
     } else {
       if(!r.analysis)fail(409,'Completa primero el análisis del CCC.');
-      if(action==='vote') {
+      if(action==='resolution') {
+        if(r.analysis.analystId!==user.id)fail(403,'La resolución debe registrarla el integrante que realizó el análisis.');
         const decision=option(data.decision,RESOLUTIONS,'una decisión');
-        r.committeeVotes=[...(r.committeeVotes||[]).filter(v=>v.id!==user.id),{id:user.id,name:user.name,decision,date:new Date().toISOString()}];
-        history(r,user,`Voto individual: ${decision}.`);
-      } else if(action==='resolution') {
-        const members=data.members;
-        if(!Array.isArray(members)||members.length<1||members.length>2||new Set(members).size!==members.length||members.some(x=>typeof x!=='string'))fail(400,'Selecciona uno o dos integrantes distintos.');
-        const authorized=new Set(committee(db).map(u=>u.id));
-        if(members.some(id=>!authorized.has(id)||id===r.ownerId)||!members.includes(user.id))fail(403,'Los participantes deben pertenecer al CCC, incluir al responsable y excluir al solicitante.');
-        if((r.committeeVotes||[]).some(v=>!members.includes(v.id)))fail(409,'Incluye a todos los integrantes que ya registraron su voto.');
-        const votes=members.map(id=>(r.committeeVotes||[]).find(v=>v.id===id));
-        if(votes.some(v=>!v))fail(409,'Cada participante debe iniciar sesión y registrar su propio voto.');
-        const expected=votes.every(v=>v.decision===votes[0].decision)?votes[0].decision:'Más información';
-        const decision=option(data.decision,RESOLUTIONS,'una decisión');
-        if(expected!==decision)fail(409,'La resolución debe coincidir con los votos. Ante desacuerdo, solicita más información.');
         const decisionNote=text(data,'decisionNote',true),conditions=decision==='Aprobado con condiciones'?text(data,'conditions',true):'';
-        const resolution={decision,decisionNote,conditions,responsible:user.name,responsibleId:user.id,date:new Date().toISOString(),votes,analysisSnapshot:{...r.analysis},requestId:r.id,requestSummary:r.title};
-        r.decision=resolution;r.resolutions.push(resolution);r.status=STATUS[decision];r.committeeVotes=[];
-        history(r,user,`${decision}: ${decisionNote}${conditions?' Condiciones: '+conditions:''}. Votos: ${votes.map(v=>v.name+': '+v.decision).join('; ')}`);
+        const resolution={decision,decisionNote,conditions,responsible:user.name,responsibleId:user.id,date:new Date().toISOString(),analysisSnapshot:{...r.analysis},requestId:r.id,requestSummary:r.title};
+        r.decision=resolution;r.resolutions.push(resolution);r.status=STATUS[decision];
+        history(r,user,`${decision}: ${decisionNote}${conditions?' Condiciones: '+conditions:''}.`);
       } else fail(404,'Acción no encontrada.');
     }
   }

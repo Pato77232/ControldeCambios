@@ -15,9 +15,9 @@ async function readJson(req) {
   if(!data||typeof data!=='object'||Array.isArray(data))fail(400,'Objeto JSON inválido.');
   return data;
 }
-function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','changeflow.sqlite'),seedPassword=process.env.SEED_PASSWORD,secureCookies=process.env.COOKIE_SECURE==='true'}={}) {
+function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','changeflow.sqlite'),seedPassword=process.env.SEED_PASSWORD,secureCookies=process.env.COOKIE_SECURE==='true',initialUsers}={}) {
   const db=openDatabase(filename);
-  try{seedUsers(db,seedPassword);}catch(e){db.close();throw e;}
+  try{seedUsers(db,seedPassword,initialUsers);}catch(e){db.close();throw e;}
   const publicAttempts=new Map();
   const attempts=new Map(),dummyHash=hashPassword('Unused-Dummy-Password');
   const cookie=token=>`changeflow_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${token?28800:0}${secureCookies?'; Secure':''}`;
@@ -45,7 +45,7 @@ function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','ch
         const attempt=attempts.get(ip)||{count:0,until:Date.now()+15*60*1000};
         if(attempt.count>=10)fail(429,'Demasiados intentos. Espera 15 minutos.');
         if(typeof data.email!=='string'||typeof data.password!=='string'||data.email.length>200||data.password.length>512)fail(400,'Credenciales inválidas.');
-        const user=db.prepare('SELECT * FROM users WHERE email=?').get(data.email.trim().toLowerCase());
+        const user=db.prepare('SELECT * FROM users WHERE email=? AND active=1').get(data.email.trim().toLowerCase());
         if(!verifyPassword(data.password,user?.password_hash||dummyHash)){attempt.count++;attempts.set(ip,attempt);fail(401,'Correo o contraseña incorrectos.');}
         attempts.delete(ip);
         const previous=getSession(db,req);if(previous)db.prepare('DELETE FROM sessions WHERE token_hash=?').run(previous.token_hash);
@@ -60,6 +60,11 @@ function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','ch
         const data=await readJson(req),r=transaction(db,()=>createRequest(db,null,data));
         json(201,{receipt:{id:r.id,date:r.date,status:r.status}});return;
       }
+      if(route==='/api/public/dashboard'&&req.method==='GET') {
+        const rows=db.prepare("SELECT json_extract(document, '$.status') AS status, COUNT(*) AS count FROM requests GROUP BY status").all();
+        const totals=Object.fromEntries(rows.map(r=>[r.status,Number(r.count)]));
+        json(200,{counts:[rows.reduce((sum,r)=>sum+Number(r.count),0),(totals.Pendiente||0)+(totals['Más información']||0),(totals.Aprobada||0)+(totals['Aprobada con condiciones']||0),totals.Rechazada||0]});return;
+      }
       const session=getSession(db,req);if(!session)fail(401,'Inicia sesión para continuar.');
       if(mutation && req.headers['x-csrf-token']!==session.csrf)fail(403,'Sesión de formulario inválida. Actualiza la página.');
       if(route==='/api/auth/me'&&req.method==='GET'){json(200,{user:publicUser(session),csrf:session.csrf});return;}
@@ -69,7 +74,7 @@ function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','ch
       if(route==='/api/requests'&&req.method==='POST') {
         const data=await readJson(req),r=transaction(db,()=>createRequest(db,session,data));json(201,{request:r,store:snapshot(db,session)});return;
       }
-      const match=/^\/api\/requests\/(SCR-\d+)(?:\/(analysis|vote|resolution|clarification))?$/.exec(route);
+      const match=/^\/api\/requests\/(SCR-\d+)(?:\/(analysis|resolution|clarification))?$/.exec(route);
       if(match && (req.method==='POST'&&match[2] || req.method==='PATCH'&&!match[2] || req.method==='DELETE'&&!match[2])) {
         const data=await readJson(req),action=match[2]||(req.method==='DELETE'?'delete':'edit');
         const r=transaction(db,()=>mutate(db,match[1],action,session,data));json(200,{request:r,store:snapshot(db,session)});return;
@@ -89,7 +94,7 @@ if(require.main===module) {
     const {server}=createApp();
     const port=Number(process.env.PORT||3000),host=process.env.HOST||'127.0.0.1';
     server.on('error',error=>{console.error(`No se pudo iniciar el servidor: ${error.code}. Revisa HOST y PORT en .env.`);process.exitCode=1;server.close();});
-    server.listen(port,host,()=>console.log(`ChangeFlow disponible en http://${host}:${port}`));
+    server.listen(port,host,()=>console.log(`Transviajes disponible en http://${host}:${port}`));
     const close=()=>server.close(()=>process.exit(0));process.on('SIGINT',close);process.on('SIGTERM',close);
   }catch(e){console.error(e.message);process.exitCode=1;}
 }

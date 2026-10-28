@@ -1,4 +1,4 @@
-/* ChangeFlow: prototipo sin dependencias. Los datos y el contador se guardan juntos. */
+/* Transviajes: prototipo sin dependencias. Los datos y el contador se guardan juntos. */
 'use strict';
 const STATES = ['Pendiente', 'Aprobada', 'Rechazada', 'Aprobada con condiciones', 'Más información'];
 const RESOLUTIONS = ['Aprobado', 'Aprobado con condiciones', 'Rechazado', 'Más información'];
@@ -10,7 +10,7 @@ const PRIORITIES = ['Baja', 'Media', 'Alta', 'Crítica'];
 const TYPES = ['Corrección de error', 'Nueva funcionalidad', 'Mejora', 'Seguridad', 'Otro'];
 // Catálogo funcional tomado de docs/business-rules.md y de los módulos del repositorio.
 // Incluir un módulo planificado permite documentar propuestas, no afirma que esté implementado.
-const PROJECT_NAME = 'ProyectoBusesUTA · Venta de pasajes interprovinciales';
+const PROJECT_NAME = 'Transviajes · Venta de pasajes interprovinciales';
 const MODULES = ['Autenticación y usuarios', 'Cooperativas', 'Frecuencias y precios por tramo', 'Buses y plantillas de asientos', 'Hojas de ruta', 'Búsqueda de viajes', 'Reservas y pasajeros', 'Pagos y comprobantes', 'Boletos QR e historial', 'Notificaciones', 'Configuración de la aplicación'];
 const ROLES = ['Administrador del Sistema', 'Usuario de Cooperativa', 'Oficinista', 'Cliente', 'Varios roles'];
 const CHANGE_CLASSES = ['Normal', 'Estándar', 'Emergencia'];
@@ -18,6 +18,7 @@ const SCOPES = ['Toda la plataforma', 'Una cooperativa'];
 const ENVIRONMENTS = ['Desarrollo', 'Pruebas', 'Producción'];
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const paths = {
+  lock:'M5 11h14v10H5z M8 11V7a4 4 0 0 1 8 0v4 M12 15v3',
   dashboard: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
 
   list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
@@ -82,7 +83,7 @@ let store = {nextId:1,requests:[]}, filter = {search:'',status:'',priority:''}, 
 const main = document.querySelector('main');
 const isCommittee = () => currentUser?.role === 'ccc';
 const canEdit = r => currentUser?.id === r.ownerId && !r.analysis && r.status === 'Pendiente';
-const canEvaluate = r => isCommittee() && r.ownerId !== currentUser.id;
+const canEvaluate = r => isCommittee() && r.ownerId !== currentUser.id && (!(r.reviewerId || r.analysis?.analystId) || (r.reviewerId || r.analysis?.analystId) === currentUser.id);
 async function api(path, {method='GET', body} = {}) {
   const response = await fetch('/api'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(csrfToken ? {'X-CSRF-Token':csrfToken} : {})},...(body === undefined ? {} : {body:JSON.stringify(body)})});
   const result = await response.json();
@@ -114,10 +115,15 @@ function renderSession() {
   document.querySelector('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST',body:{}});currentUser=null;csrfToken='';CCC_USERS=[];store={nextId:1,requests:[]};renderSession();location.hash='nueva/usuario';route();}catch(e){toast(e.message,true);}};
 }
 function loginScreen(message='') {
-  main.innerHTML=heading('Iniciar sesión','Accede con tu cuenta para registrar o revisar solicitudes de cambio.')+`<form id="login-form" class="card login-card"><div class="detail-body"><h2>Acceso a BusesUTA</h2><label for="login-email">Correo electrónico</label><input id="login-email" name="email" type="email" autocomplete="username" required maxlength="200"><label for="login-password">Contraseña</label><input id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="512"><p class="error" id="login-error" role="alert">${esc(message)}</p><button class="btn primary" type="submit">Entrar</button><p><a class="text-link" href="#nueva/usuario">Presentar una solicitud sin cuenta</a></p></div></form>`;
+  document.querySelector('#breadcrumb').textContent='Iniciar sesión';
+  main.innerHTML=`<div class="login-layout"><aside class="login-story"><a class="login-wordmark" href="#login"><span class="login-mark" aria-hidden="true">${icon('arrow')}</span><span>Trans<strong>viajes</strong></span></a><p class="login-kicker">SISTEMA DE CONTROL DE CAMBIOS</p><h1>Un mejor sistema.<br>Un cambio a la vez.</h1><p class="login-description">Gestionamos las mejoras de nuestro sistema de manera ordenada y transparente.</p><div class="login-features">${[['layers','Mejoras continuas','Un sistema más eficiente.'],['check','Transparencia','Seguimiento de cada etapa del cambio.'],['user','Trabajo en equipo','Usuarios, desarrolladores y comité de cambios.']].map(([i,t,d])=>`<div><span>${icon(i)}</span><p><strong>${t}</strong><small>${d}</small></p></div>`).join('')}</div><small class="login-story-footer">Transviajes · Control de Cambios</small></aside><section class="login-access"><form id="login-form" class="login-form"><p class="login-eyebrow">BIENVENIDO A TRANSVIAJES</p><h2>Iniciar sesión</h2><p class="login-subtitle">Accede al sistema de control de cambios.</p><label for="login-email">Correo electrónico</label><div class="login-input"><span aria-hidden="true">${icon('user')}</span><input id="login-email" name="email" type="email" autocomplete="username" placeholder="Ingresa tu correo electrónico" required maxlength="200"></div><label for="login-password">Contraseña</label><div class="login-input"><span aria-hidden="true">${icon('lock')}</span><input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Ingresa tu contraseña" required maxlength="512"><button id="toggle-password" type="button" aria-label="Mostrar contraseña" aria-pressed="false">${icon('eye')}</button></div><p class="error" id="login-error" role="alert">${esc(message)}</p><button class="btn primary login-submit" type="submit">Iniciar sesión ${icon('arrow')}</button><div class="login-divider"><span>o</span></div><div class="login-guest"><span class="login-guest-icon" aria-hidden="true">${icon('book')}</span><div><h3>¿No tienes una cuenta?</h3><p>Si eres usuario final, puedes presentar una solicitud de cambio sin registrarte.</p></div><a class="btn login-guest-link" href="#nueva/usuario">Registrar solicitud sin cuenta ${icon('arrow')}</a></div><p class="login-note">El acceso del equipo técnico y del CCC requiere una cuenta autorizada.</p></form></section></div>`;
+  document.querySelector('#toggle-password').onclick=()=>{
+    const input=document.querySelector('#login-password'),button=document.querySelector('#toggle-password');
+    const show=input.type==='password';input.type=show?'text':'password';button.setAttribute('aria-label',show?'Ocultar contraseña':'Mostrar contraseña');button.setAttribute('aria-pressed',String(show));
+  };
   document.querySelector('#login-form').onsubmit=async event=>{
-    event.preventDefault();const button=event.currentTarget.querySelector('button');button.disabled=true;
-    try{const data=await api('/auth/login',{method:'POST',body:Object.fromEntries(new FormData(event.currentTarget))});currentUser=data.user;csrfToken=data.csrf;await loadStore();renderSession();route();}
+    event.preventDefault();const button=event.currentTarget.querySelector('button[type="submit"]');button.disabled=true;
+    try{const data=await api('/auth/login',{method:'POST',body:Object.fromEntries(new FormData(event.currentTarget))});currentUser=data.user;csrfToken=data.csrf;await loadStore();renderSession();if(location.hash==='#login')location.hash='panel';route();}
     catch(e){document.querySelector('#login-error').textContent=e.message;}
     finally{button.disabled=false;}
   };
@@ -125,6 +131,21 @@ function loginScreen(message='') {
 async function bootstrap() {
   try{const data=await api('/auth/me');currentUser=data.user;csrfToken=data.csrf;await loadStore();renderSession();route();}
   catch(e){renderSession();if(e.status===401)route();else loginScreen('No se pudo conectar con el servidor. Inicia el proyecto con npm start.');}
+}
+let refreshingPanel=false;
+async function refreshPanel() {
+  const view=location.hash.slice(1).split('/')[0];
+  if(!currentUser || !['','panel','solicitudes'].includes(view) || document.visibilityState==='hidden' || refreshingPanel || saving)return;
+  refreshingPanel=true;
+  const userId=currentUser.id;
+  try {
+    const data=await api('/requests');
+    if(currentUser?.id!==userId)return;
+    const changed=JSON.stringify(store)!==JSON.stringify(data);
+    store=data;document.querySelector('#nav-count').textContent=store.requests.length;
+    if(changed && ['','panel','solicitudes'].includes(location.hash.slice(1).split('/')[0]))route();
+  }catch(error){if(error.status!==401)toast('No se pudo actualizar el panel. Usa Actualizar para reintentar.',true);}
+  finally{refreshingPanel=false;}
 }
 function toast(message, failure = false) {
   const el = document.querySelector('#toast');
@@ -231,8 +252,8 @@ function table(requests, emptyText = 'Todavía no hay solicitudes.') {
 <p>Crea una solicitud o ajusta los filtros para continuar.</p>${newButton()}</div>`;
 
 }
-function dashboard() {
-  const counts = [store.requests.length, store.requests.filter(r=>canReview(r)).length, store.requests.filter(r=>['Aprobada','Aprobada con condiciones'].includes(r.status)).length, store.requests.filter(r=>r.status === 'Rechazada').length];
+function dashboard(publicCounts) {
+  const counts = publicCounts || [store.requests.length, store.requests.filter(r=>canReview(r)).length, store.requests.filter(r=>['Aprobada','Aprobada con condiciones'].includes(r.status)).length, store.requests.filter(r=>r.status === 'Rechazada').length];
   main.innerHTML = heading('Panel principal', 'Peticiones de cambio del sistema de venta de pasajes interprovinciales.', newButton()) +
     `<div class="stats">${['Total de solicitudes', 'Pendientes / Más información', 'Aprobadas (incluye condiciones)', 'Rechazadas'].map((label, i) => `<div class="stat">
 <div class="stat-top">${label}<span class="stat-icon">${icon(['book', 'clock', 'check', 'close'][i])}</span>
@@ -240,7 +261,7 @@ function dashboard() {
 <div class="stat-value">${String(counts[i]).padStart(2, '0')}</div>
 <small>${['Registradas en el sistema', 'En espera de evaluación', 'Listas para su planificación', 'Evaluadas y no aprobadas'][i]}</small>
 </div>`).join('')}</div>
-<section class="card">
+${currentUser ? `<section class="card">
 <div class="card-head">
 <div>
 <h2>Solicitudes recientes</h2>
@@ -249,9 +270,10 @@ function dashboard() {
 <a class="text-link" href="#solicitudes">Ver todas ${icon('arrow')}</a>
 </div>${table([...store.requests].reverse().slice(0, 5))}<div class="table-foot">
 <span>Mostrando ${Math.min(store.requests.length, 5)} de ${store.requests.length} solicitudes</span>
-<span>Datos del servidor · Usa Actualizar para consultar cambios</span>
+<span>Datos del servidor · Actualización automática</span>
 </div>
 </section>
+` : `<section class="card info-body"><h2>Control de cambios de Transviajes</h2><p>Consulta el resumen del proceso y presenta una solicitud sin crear una cuenta.</p><div class="actions">${newButton()}<a class="btn" href="#login">Acceso al equipo técnico y CCC</a><button class="btn" id="refresh-public-dashboard">Actualizar resumen</button></div><p class="hint">Los expedientes y los datos de los solicitantes son de acceso reservado.</p></section>`}
 <div class="bottom-grid">
 <section class="card">
 <div class="card-head">
@@ -268,18 +290,32 @@ function dashboard() {
 </section>
 <section class="card notice">
 <h2>${icon('info')} Tu espacio de demostración</h2>
-<p>Documenta cambios de ProyectoBusesUTA. Las solicitudes, análisis, votos y resoluciones se conservan en el servidor.</p>
+<p>Documenta cambios en Transviajes. Las solicitudes, análisis y resoluciones se conservan en el servidor.</p>
 <small>Acceso según el perfil de la cuenta</small>
 </section>
 </div>`;
 
+}
+let publicDashboardLoad = 0;
+async function publicDashboard() {
+  const load=++publicDashboardLoad;
+  document.querySelector('#breadcrumb').textContent='Panel principal';
+  document.querySelector('#nav-count').textContent='';
+  main.innerHTML=heading('Panel principal','Cargando resumen de Transviajes…');
+  const stillVisible=()=>!currentUser && ['', 'panel'].includes(location.hash.slice(1)) && load===publicDashboardLoad;
+  try {
+    const data=await api('/public/dashboard');
+    if(!stillVisible())return;
+    dashboard(data.counts);
+    document.querySelector('#refresh-public-dashboard').onclick=publicDashboard;
+  }catch(error){if(stillVisible()){main.innerHTML=heading('Panel principal','No se pudo cargar el resumen. Intenta nuevamente.')+'<button class="btn" id="retry-dashboard">Reintentar</button>';document.querySelector('#retry-dashboard').onclick=publicDashboard;}}
 }
 function options(values, current, placeholder = '') {
   return `${placeholder ? `<option value="">${placeholder}</option>` : ''}${values.map(v => `<option value="${esc(v)}" ${v === current ? 'selected' : ''}>${esc(v)}</option>`).join('')}`;
 
 }
 function listing() {
-  main.innerHTML = heading('Solicitudes de cambio', 'Consulta, organiza y evalúa los cambios de ProyectoBusesUTA.', newButton()) +
+  main.innerHTML = heading('Solicitudes de cambio', 'Consulta, organiza y evalúa los cambios de Transviajes.', newButton()) +
     `<section class="card">
 <div class="toolbar">
 <div class="search">${icon('search')}<input id="search" type="search" aria-label="Buscar por código o título" placeholder="Buscar por código o título…" value="${esc(filter.search)}">
@@ -352,7 +388,7 @@ const fieldLabels = {
   acceptanceCriteria: 'Criterios de aceptación',
   technicalImpact: 'Impacto técnico previsto'
 };
-const requiredFields = ['member1','vote1','name','email','project','module','title','currentBehavior','description','justification','result','components','environment','acceptanceCriteria','analyst','impact','technicalImpact','risks','feasibility','effort','resources','considerations','priority','responsible','decision','decisionNote'];
+const requiredFields = ['name','email','project','module','title','currentBehavior','description','justification','result','components','environment','acceptanceCriteria','analyst','impact','technicalImpact','risks','feasibility','effort','resources','considerations','priority','responsible','decision','decisionNote'];
 Object.assign(fieldLabels,{analyst:'Miembro del CCC',feasibility:'Viabilidad',effort:'Esfuerzo y tiempo estimados',resources:'Recursos necesarios',considerations:'Consideraciones y recomendación',responsible:'Responsable de la decisión',decision:'Decisión',decisionNote:'Motivos de la decisión',requesterType:'Tipo de solicitante',analysisDate:'Fecha del análisis'});
 function field(key, value = '', config = {}) {
   const required = requiredFields.includes(key);
@@ -405,8 +441,8 @@ function editForm(request, kind = 'usuario') {
   const areas = ['currentBehavior','description','justification','result','acceptanceCriteria','observations'];
   const render = k => field(k,r[k], { area: areas.includes(k), full: areas.includes(k) || ['module','title','project'].includes(k), readonly:!!currentUser && ['name','email'].includes(k), ...(k === 'email' ? {type:'email'} : {}), ...(k === 'desiredDate' ? {type:'date',min:r.date} : {}), ...(k === 'module' ? {options:MODULES,placeholder:'Selecciona un módulo'} : {}), ...(k === 'environment' ? {options:ENVIRONMENTS,placeholder:'Selecciona un entorno'} : {}) });
   main.innerHTML = heading(editing ? 'Editar petición' : `Petición del ${expert ? 'experto desarrollador' : 'usuario final'}`, `${r.id} · La petición se enviará al CCC para su análisis.`) +
-    `<form id="request-form" class="form-layout" novalidate><p class="form-note">Los campos con * son obligatorios.</p>${section('1','Datos de la petición','Código y fecha automáticos.',field('id',r.id,{readonly:true,full:true,hint:'Identificador generado automáticamente'}) + common.slice(0,2).map(render).join('') + radioCards('type',expert ? ['Defecto','Mejora','Nueva funcionalidad','Refactorización','Seguridad'] : ['Error','Mejora','Nueva funcionalidad'],r.type || (expert ? 'Defecto' : 'Error'),expert ? ['Corrección de un error en el sistema','Optimización de funcionalidad','Implementación de nueva funcionalidad','Mejora en el código sin cambio funcional','Cambios para mitigar riesgos'] : ['Reporta un problema en el sistema','Solicitud de mejora en una funcionalidad','Propuesta de una nueva funcionalidad']) + common.slice(2).map(render).join(''))}${expert ? section('2','Propuesta técnica','Información aportada por el desarrollador; el CCC realizará su propia evaluación.',technical.map(render).join('') + radioCards('proposedPriority',PRIORITIES,r.proposedPriority || 'Media',['Impacto bajo','Impacto moderado','Impacto alto','Impacto muy alto'])) : ''}${section(expert ? '3' : '2','Información complementaria','Fecha deseada y evidencias opcionales.',render('desiredDate') + render('observations') + `<div class="field full"><label for="attachments">Adjuntar evidencia</label><label class="upload-zone" for="attachments">${icon('attach')}<span><strong>Haga clic para adjuntar archivos</strong><small>Seleccione las evidencias de su solicitud</small></span><input id="attachments" type="file" multiple></label><small class="hint">En este prototipo se registran únicamente los nombres de los archivos.</small><p id="file-names" class="hint">${r.attachments.map(esc).join(', ')}</p><button class="btn" id="clear-files" type="button">Quitar adjuntos</button></div>`)}<div class="form-actions"><a class="btn" href="#solicitudes">Cancelar</a><button class="btn primary">${icon('send')} Enviar solicitud</button></div></form>`;
-  main.innerHTML = formShell(kind, `Solicitud de cambio – ${expert ? 'Experto desarrollador' : 'Usuario final'}`, expert ? 'Este formulario está dirigido al personal técnico que puede proporcionar información detallada sobre software y configuraciones del sistema.' : 'Solicita un cambio en el sistema BusesUTA o reporta un problema. Puedes enviar tu solicitud sin cuenta, indicando tu nombre y correo electrónico.', main.innerHTML.slice(main.innerHTML.indexOf('<form')), r);
+    `<form id="request-form" class="form-layout" novalidate><p id="request-error" class="error request-error" role="alert" tabindex="-1"></p><p class="form-note">Los campos con * son obligatorios.</p>${section('1','Datos de la petición','Código y fecha automáticos.',field('id',r.id,{readonly:true,full:true,hint:'Identificador generado automáticamente'}) + common.slice(0,2).map(render).join('') + radioCards('type',expert ? ['Defecto','Mejora','Nueva funcionalidad','Refactorización','Seguridad'] : ['Error','Mejora','Nueva funcionalidad'],r.type || (expert ? 'Defecto' : 'Error'),expert ? ['Corrección de un error en el sistema','Optimización de funcionalidad','Implementación de nueva funcionalidad','Mejora en el código sin cambio funcional','Cambios para mitigar riesgos'] : ['Reporta un problema en el sistema','Solicitud de mejora en una funcionalidad','Propuesta de una nueva funcionalidad']) + common.slice(2).map(render).join(''))}${expert ? section('2','Propuesta técnica','Información aportada por el desarrollador; el CCC realizará su propia evaluación.',technical.map(render).join('') + radioCards('proposedPriority',PRIORITIES,r.proposedPriority || 'Media',['Impacto bajo','Impacto moderado','Impacto alto','Impacto muy alto'])) : ''}${section(expert ? '3' : '2','Información complementaria','Fecha deseada y evidencias opcionales.',render('desiredDate') + render('observations') + `<div class="field full"><label for="attachments">Adjuntar evidencia</label><label class="upload-zone" for="attachments">${icon('attach')}<span><strong>Haga clic para adjuntar archivos</strong><small>Seleccione las evidencias de su solicitud</small></span><input id="attachments" type="file" multiple></label><small class="hint">En este prototipo se registran únicamente los nombres de los archivos.</small><p id="file-names" class="hint">${r.attachments.map(esc).join(', ')}</p><button class="btn" id="clear-files" type="button">Quitar adjuntos</button></div>`)}<div class="form-actions"><a class="btn" href="#solicitudes">Cancelar</a><button class="btn primary">${icon('send')} Enviar solicitud</button></div></form>`;
+  main.innerHTML = formShell(kind, `Solicitud de cambio – ${expert ? 'Experto desarrollador' : 'Usuario final'}`, expert ? 'Este formulario está dirigido al personal técnico que puede proporcionar información detallada sobre software y configuraciones del sistema.' : 'Solicita un cambio en el sistema Transviajes o reporta un problema. Puedes enviar tu solicitud sin cuenta, indicando tu nombre y correo electrónico.', main.innerHTML.slice(main.innerHTML.indexOf('<form')), r);
   let attachments = [...r.attachments];
   const files = document.querySelector('#attachments');
   files.onchange = () => { attachments = Array.from(files.files,f => f.name); document.querySelector('#file-names').textContent = attachments.join(', '); };
@@ -425,7 +461,8 @@ function editForm(request, kind = 'usuario') {
     if (expert && data.specId && !/^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+$/.test(data.specId)) errors.specId = 'Usa un ID como AUTH-01.';
     if (expert && data.businessRules && !/^RN-\d{2}(?:\s*,\s*RN-\d{2})*$/.test(data.businessRules)) errors.businessRules = 'Usa referencias como RN-02, RN-20.';
     if (data.desiredDate && data.desiredDate < r.date) errors.desiredDate = 'La fecha no puede ser anterior a la petición.';
-    if (!showErrors(form,errors)) return;
+    document.querySelector('#request-error').textContent='';
+    if (!showErrors(form,errors)) {document.querySelector('#request-error').textContent='No se envió la solicitud. Revisa los campos marcados para continuar.';return;}
     if(!currentUser) {
       if(saving)return;
       saving=true;
@@ -435,7 +472,7 @@ function editForm(request, kind = 'usuario') {
         main.innerHTML=heading('Solicitud enviada','El Comité de Control de Cambios recibió tu solicitud.')+`<section class="card info-body receipt"><h2>${icon('check')} Solicitud ${esc(result.receipt.id)}</h2><p>Guarda este código como referencia de tu solicitud.</p><p>Fecha: ${dateLabel(result.receipt.date)} · Estado: ${esc(result.receipt.status)}</p><p>La solicitud quedó registrada con los datos de contacto que proporcionaste.</p><button class="btn primary" id="another-request" type="button">Presentar otra solicitud</button></section>`;
         document.querySelector('#another-request').onclick=()=>editForm(null,'usuario');
         window.scrollTo(0,0);main.focus({preventScroll:true});
-      } catch(error){toast(error.message,true);}finally{saving=false;button.disabled=false;}
+      } catch(error){const message=error instanceof TypeError ? 'No se pudo confirmar el envío. Revisa tu conexión e intenta nuevamente.' : error.message;const alert=document.querySelector('#request-error');alert.textContent=message;alert.focus();toast(message,true);}finally{saving=false;button.disabled=false;}
       return;
     }
     const result = await saveAction(editing ? `/requests/${r.id}` : '/requests',{...data,requesterType:kind,attachments,revision:r.revision},editing ? 'PATCH' : 'POST');
@@ -449,51 +486,37 @@ function committeeForm(r, decision = false) {
   const keys=['impact','technicalImpact','risks','feasibility','effort','resources','considerations','priority'];
   const values={...(r.analysis || {}),analyst:currentUser.name};
   const selects={impact:['Bajo','Medio','Alto'],feasibility:['Viable','Viable con condiciones','No viable'],priority:PRIORITIES};
-  main.innerHTML=heading('Análisis del CCC',`${r.id} · ${esc(r.title)}`,`<a class="btn" href="#detalle/${r.id}">Consultar petición</a>`)+`<form id="committee-form" class="form-layout" novalidate>${section('2','Impacto y consideraciones','Todos los campos son obligatorios. Guardar el análisis invalida los votos anteriores.',field('analyst',values.analyst,{readonly:true})+field('analysisDate',values.date ? dateLabel(values.date) : 'Automática al guardar',{readonly:true})+keys.map(k=>['feasibility','priority','impact'].includes(k) ? radioCards(k,selects[k],values[k],k==='feasibility'?['El cambio puede implementarse sin limitaciones significativas.','Requiere condiciones o ajustes adicionales.','No es viable con la infraestructura actual.']:[]) : field(k,values[k],{options:selects[k],placeholder:selects[k]?'Selecciona una opción':'',area:['technicalImpact','risks','resources','considerations'].includes(k),full:['resources','considerations'].includes(k)})).join(''))}<div class="form-actions"><a class="btn" href="#detalle/${r.id}">Cancelar</a><button class="btn primary">Guardar análisis</button></div></form>`;
+  main.innerHTML=heading('Análisis del CCC',`${r.id} · ${esc(r.title)}`,`<a class="btn" href="#detalle/${r.id}">Consultar petición</a>`)+`<form id="committee-form" class="form-layout" novalidate>${section('2','Impacto y consideraciones','El integrante que registra el análisis será responsable de resolver esta petición.',field('analyst',values.analyst,{readonly:true})+field('analysisDate',values.date ? dateLabel(values.date) : 'Automática al guardar',{readonly:true})+keys.map(k=>['feasibility','priority','impact'].includes(k) ? radioCards(k,selects[k],values[k],k==='feasibility'?['El cambio puede implementarse sin limitaciones significativas.','Requiere condiciones o ajustes adicionales.','No es viable con la infraestructura actual.']:[]) : field(k,values[k],{options:selects[k],placeholder:selects[k]?'Selecciona una opción':'',area:['technicalImpact','risks','resources','considerations'].includes(k),full:['resources','considerations'].includes(k)})).join(''))}<div class="form-actions"><a class="btn" href="#detalle/${r.id}">Cancelar</a><button class="btn primary">Guardar análisis</button></div></form>`;
   main.innerHTML = formShell('analisis','Análisis de impacto del cambio – CCC','Un miembro o analista asignado por el Comité de Control de Cambios evalúa la solicitud antes de la decisión final.',main.innerHTML.slice(main.innerHTML.indexOf('<form')),r);
   document.querySelector('#committee-form').onsubmit=async event=>{
     event.preventDefault();const form=event.currentTarget,data=Object.fromEntries(new FormData(form)),errors={};
     keys.forEach(k=>{data[k]=String(data[k]||'').trim();if(!data[k])errors[k]='Este campo es obligatorio.';else if(selects[k]&&!selects[k].includes(data[k]))errors[k]='Selecciona una opción válida.';});
     if(!showErrors(form,errors))return;
     const result=await saveAction(`/requests/${r.id}/analysis`,{...data,revision:r.revision});
-    if(result){location.hash=`detalle/${r.id}`;route();toast('Análisis guardado. Cada miembro puede registrar su voto.');}
+    if(result){location.hash=`detalle/${r.id}`;route();toast('Análisis guardado. Ya puedes registrar la resolución de esta petición.');}
   };
 }
 function resolutionDetails(d) {
-  return `<h3>Resolución del CCC · ${esc(d.decision)}</h3><p>${esc(d.responsible)} · ${dateLabel(d.date,true)}</p><p>${esc(d.decisionNote)}</p>${d.conditions ? `<h4>Condiciones de aprobación</h4><p>${esc(d.conditions)}</p>` : ''}${d.votes ? `<h4>Participantes y votos</h4><ul>${d.votes.map(v=>`<li>${esc(v.name)}: ${esc(v.decision)}</li>`).join('')}</ul>` : ''}`;
+  return `<h3>Resolución del CCC · ${esc(d.decision)}</h3><p>${esc(d.responsible)} · ${dateLabel(d.date,true)}</p><p>${esc(d.decisionNote)}</p>${d.conditions ? `<h4>Condiciones de aprobación</h4><p>${esc(d.conditions)}</p>` : ''}`;
 }
 function resolutionForm(r) {
   if(!canEvaluate(r)||!canReview(r)||!r.analysis){main.innerHTML=heading('Etapa no disponible','Se requiere un análisis previo y un miembro independiente del CCC.')+`<a class="btn" href="#detalle/${r.id}">Volver</a>`;return;}
-  Object.assign(fieldLabels,{conditions:'Condiciones de aprobación',resolutionId:'ID del cambio',requestSummary:'Resumen de solicitud',analysisSummary:'Resultado del análisis',registeredBy:'Responsable de la resolución',decisionDate:'Fecha de decisión',ownVote:'Mi voto',decision:'Decisión final',decisionNote:'Motivo de la decisión'});
-  const members=CCC_USERS.filter(u=>u.id!==r.ownerId),votes=r.committeeVotes || [];
-  const optionsMembers=`<option value="">Selecciona un integrante</option>${members.map(u=>`<option value="${u.id}" ${u.id===currentUser.id?'selected':''}>${esc(u.name)}</option>`).join('')}`;
-  const own= votes.find(v=>v.id===currentUser.id);
-  main.innerHTML=heading('Resolución del CCC','Cada integrante registra su propio voto con su sesión.',`<a class="btn" href="#detalle/${r.id}">Consultar expediente</a>`)+
-    `<section class="card info-body"><h2>Votos registrados</h2><p>${votes.length?votes.map(v=>`${esc(v.name)}: ${esc(v.decision)}`).join('<br>'):'Todavía no hay votos.'}</p><form id="vote-form"><label for="own-vote">Mi voto · ${esc(currentUser.name)}</label><select id="own-vote" required>${options(RESOLUTIONS,own?.decision,'Selecciona tu voto')}</select><button class="btn" type="submit">Guardar mi voto</button></form><p class="hint">Usa Actualizar para consultar el voto de otro integrante. Un cambio en el análisis requiere renovar todos los votos.</p></section>`+
-    `<form id="resolution-form" class="form-layout" novalidate>${section('4','Resolución del Comité','El responsable y la fecha se obtienen del servidor.',
-      `<div class="field"><label for="member1">Primer integrante *</label><select id="member1" name="member1" required>${optionsMembers}</select><span class="error" id="member1-error"></span></div><div class="field"><label for="member2">Segundo integrante (opcional)</label><select id="member2" name="member2">${optionsMembers.replaceAll(' selected','')}</select><span class="error" id="member2-error"></span></div><p class="hint full">Con dos integrantes se requiere unanimidad. Ante desacuerdo, solicita más información. El responsable debe participar y nadie puede resolver su propia solicitud.</p>`+
+  Object.assign(fieldLabels,{conditions:'Condiciones de aprobación',resolutionId:'ID del cambio',requestSummary:'Resumen de solicitud',analysisSummary:'Resultado del análisis',registeredBy:'Responsable de la resolución',decisionDate:'Fecha de decisión',decision:'Decisión final',decisionNote:'Motivo de la decisión'});
+  main.innerHTML=heading('Resolución del CCC','El integrante responsable del análisis registra la decisión final.')+
+    `<form id="resolution-form" class="form-layout" novalidate>${section('3','Resolución de la petición','El responsable y la fecha se obtienen del servidor.',
       `<fieldset class="field full resolution-options"><legend>Decisión final *</legend>${RESOLUTIONS.map((d,i)=>`<label><input type="radio" name="decision" id="${i===0?'decision':'decision-'+i}" value="${esc(d)}" required><span><span class="decision-symbol symbol-${i}">${icon(['check','clock','close','info'][i])}</span><strong>${d==='Más información'?'Solicitar más información':d}</strong><small>${['Se aprueba la implementación del cambio.','Se aprueba sujeto a condiciones específicas.','Se rechaza la solicitud de cambio.','Se requiere información adicional antes de decidir.'][i]}</small></span></label>`).join('')}<span class="error" id="decision-error"></span></fieldset>`+
       field('decisionNote','',{area:true,full:true})+`<div id="conditions-wrap" class="full" hidden>${field('conditions','',{area:true,full:true,hint:'Obligatorio al aprobar con condiciones.'})}</div>`+
       field('registeredBy',currentUser.name,{readonly:true})+field('decisionDate','Automática al guardar',{readonly:true}))}<div class="form-actions"><a class="btn" href="#detalle/${r.id}">Cancelar</a><button class="btn primary">Guardar resolución</button></div></form>`;
-  main.innerHTML = formShell('decision','Resolución del Comité de Control de Cambios','El Comité de Control de Cambios (CCC) emite la aprobación formal, aprobación con condiciones, rechazo o solicitud de más información sobre la solicitud de cambio.',main.innerHTML.slice(main.innerHTML.indexOf('<section')),r);
-  document.querySelector('#vote-form').onsubmit=async event=>{
-    event.preventDefault();const decision=document.querySelector('#own-vote').value;
-    const result=await saveAction(`/requests/${r.id}/vote`,{decision,revision:r.revision});
-    if(result){resolutionForm(result.request);toast('Tu voto quedó registrado.');}
-  };
+  main.innerHTML = formShell('decision','Resolución del Comité de Control de Cambios','El integrante del CCC responsable del análisis registra la decisión final y sus motivos para resolver esta petición.',main.innerHTML.slice(main.innerHTML.indexOf('<form')),r);
   const form=document.querySelector('#resolution-form');
   form.addEventListener('change',()=>{const conditional=form.querySelector('input[name="decision"]:checked')?.value==='Aprobado con condiciones';form.querySelector('#conditions-wrap').hidden=!conditional;form.querySelector('#conditions').required=conditional;});
   form.onsubmit=async event=>{
     event.preventDefault();const data=Object.fromEntries(new FormData(form)),errors={};
-    const participants=[data.member1,data.member2].filter(Boolean);
-    if(!data.member1)errors.member1='Selecciona un integrante.';
-    if(participants.length===2&&participants[0]===participants[1])errors.member2='Selecciona un integrante diferente.';
-    if(!participants.includes(currentUser.id))errors.member1='El responsable debe participar.';
     if(!RESOLUTIONS.includes(data.decision))errors.decision='Selecciona la decisión final.';
     if(!String(data.decisionNote||'').trim())errors.decisionNote='Explica el motivo de la decisión.';
     if(data.decision==='Aprobado con condiciones'&&!String(data.conditions||'').trim())errors.conditions='Especifica las condiciones.';
     if(!showErrors(form,errors))return;
-    const result=await saveAction(`/requests/${r.id}/resolution`,{members:participants,decision:data.decision,decisionNote:data.decisionNote,conditions:data.conditions||'',revision:r.revision});
+    const result=await saveAction(`/requests/${r.id}/resolution`,{decision:data.decision,decisionNote:data.decisionNote,conditions:data.conditions||'',revision:r.revision});
     if(result){location.hash=`detalle/${r.id}`;route();toast('Resolución registrada por el CCC.');}
   };
 }
@@ -561,7 +584,7 @@ ${canEdit(r) ? `<a class="btn primary" href="#editar/${r.id}">${icon('edit')} Ed
 </section>
 </div>
 <div>
-<section class="card evaluation"><div class="detail-body"><h2>Flujo del CCC</h2><p>1. Petición registrada · ${r.requesterType === 'usuario' ? 'Usuario final' : 'Experto desarrollador (o registro anterior)'}</p><p>2. Análisis: ${r.analysis ? 'Completado' : 'Pendiente'}</p><p>3. Decisión: ${r.status === 'Pendiente' ? 'Pendiente' : esc(r.status)}</p>${canReview(r) && canEvaluate(r) ? `<a class="btn primary" href="#analisis/${r.id}">${r.analysis ? 'Revisar análisis' : 'Completar análisis'}</a>${r.analysis ? `<a class="btn" href="#decision/${r.id}">Registrar decisión</a>` : '<p class="hint">Completa el análisis para habilitar la decisión.</p>'}` : (canReview(r)?'<p>En espera de revisión del CCC.</p>':'<p>El proceso de esta petición ha finalizado.</p>')}${!r.requesterType ? '<p class="hint">Registro anterior: conserva sus datos e historial; puede no contener un análisis separado.</p>' : ''}${r.analysis ? `<h3>Análisis del CCC</h3><dl>${Object.keys(r.analysis).filter(k=>k!=='analystId').map(k=>definition(k==='date'?'analysisDate':k,k==='date'?dateLabel(r.analysis[k],true):r.analysis[k])).join('')}</dl>` : ''}${r.decision ? resolutionDetails(r.decision) : ''}${r.clarifications?.length ? `<h3>Información adicional</h3>${r.clarifications.map(c=>`<p>${esc(c.note)}</p><small>${esc(c.responsible)} · ${dateLabel(c.date,true)}</small>`).join('')}` : ''}${r.status==='Más información' && r.ownerId===currentUser.id ? '<form id="clarification-form"><label for="clarification-note">Información solicitada por el CCC</label><textarea id="clarification-note" required maxlength="5000"></textarea><button class="btn primary">Enviar información</button></form>' : ''}${r.resolutions?.length > 1 ? `<details><summary>Resoluciones anteriores (${r.resolutions.length-1})</summary>${r.resolutions.slice(0,-1).map(resolutionDetails).join('')}</details>` : ''}</div></section>
+<section class="card evaluation"><div class="detail-body"><h2>Flujo del CCC</h2><p>1. Petición registrada · ${r.requesterType === 'usuario' ? 'Usuario final' : 'Experto desarrollador (o registro anterior)'}</p><p>2. Análisis: ${r.analysis ? 'Completado' : 'Pendiente'}</p><p>3. Decisión: ${r.status === 'Pendiente' ? 'Pendiente' : esc(r.status)}</p>${canReview(r) && canEvaluate(r) ? `<a class="btn primary" href="#analisis/${r.id}">${r.analysis ? 'Revisar análisis' : 'Completar análisis'}</a>${r.analysis ? `<a class="btn" href="#decision/${r.id}">Registrar decisión</a>` : '<p class="hint">Completa el análisis para habilitar la decisión.</p>'}` : (canReview(r)?`<p>${r.analysis ? 'Responsable del CCC: '+esc(r.analysis.analyst) : 'En espera del responsable del CCC.'}</p>`:'<p>El proceso de esta petición ha finalizado.</p>')}${!r.requesterType ? '<p class="hint">Registro anterior: conserva sus datos e historial; puede no contener un análisis separado.</p>' : ''}${r.analysis ? `<h3>Análisis del CCC</h3><dl>${Object.keys(r.analysis).filter(k=>k!=='analystId').map(k=>definition(k==='date'?'analysisDate':k,k==='date'?dateLabel(r.analysis[k],true):r.analysis[k])).join('')}</dl>` : ''}${r.decision ? resolutionDetails(r.decision) : ''}${r.clarifications?.length ? `<h3>Información adicional</h3>${r.clarifications.map(c=>`<p>${esc(c.note)}</p><small>${esc(c.responsible)} · ${dateLabel(c.date,true)}</small>`).join('')}` : ''}${r.status==='Más información' && r.ownerId===currentUser.id ? '<form id="clarification-form"><label for="clarification-note">Información solicitada por el CCC</label><textarea id="clarification-note" required maxlength="5000"></textarea><button class="btn primary">Enviar información</button></form>' : ''}${r.resolutions?.length > 1 ? `<details><summary>Resoluciones anteriores (${r.resolutions.length-1})</summary>${r.resolutions.slice(0,-1).map(resolutionDetails).join('')}</details>` : ''}</div></section>
 <section class="card">
 <div class="card-head">
 <div>
@@ -586,8 +609,9 @@ ${canEdit(r) ? `<a class="btn primary" href="#editar/${r.id}">${icon('edit')} Ed
 function route() {
   if(!currentUser){
     const publicView=location.hash.slice(1);
-    if(publicView==='login' || (publicView && !['panel','nueva','nueva/usuario'].includes(publicView)))loginScreen();
-    else editForm(null,'usuario');
+    if(['','panel'].includes(publicView))publicDashboard();
+    else if(['nueva','nueva/usuario'].includes(publicView))editForm(null,'usuario');
+    else loginScreen();
     window.scrollTo(0,0);main.focus({preventScroll:true});return;
   }
   const [view = 'panel', id] = location.hash.slice(1).split('/');
@@ -656,5 +680,8 @@ document.querySelector('#delete-dialog').addEventListener('close', async event =
 });
 document.querySelectorAll('[data-icon]').forEach(el => el.innerHTML = icon(el.dataset.icon));
 document.addEventListener('input', event => { if(event.target.tagName === 'TEXTAREA') { const counter = document.querySelector(`[data-counter="${event.target.id}"]`); if(counter) counter.textContent = `${event.target.value.length}/${event.target.maxLength}`; } });
-window.addEventListener('hashchange', route);
+window.addEventListener('hashchange', () => {route();refreshPanel();});
+window.addEventListener('focus', refreshPanel);
+document.addEventListener('visibilitychange', refreshPanel);
+setInterval(refreshPanel,15000);
 bootstrap();

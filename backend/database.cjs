@@ -20,7 +20,8 @@ function openDatabase(filename) {
       db.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='requests'").run(sequence);
     });
   }
-  db.exec("PRAGMA user_version=2");
+  if(!db.prepare('PRAGMA table_info(users)').all().some(c=>c.name==='active'))db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+  db.exec("PRAGMA user_version=3");
   return db;
 }
 function transaction(db, work) {
