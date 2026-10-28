@@ -79,7 +79,7 @@ test('la solicitud pública no crea cuenta y solo el CCC activo la ve',async()=>
   const app=await start();
   try {
     const guest=await client(app),ccc=await client(app,'pablomiembroccc@uta.edu.ec');
-    const payload={...common,name:'Visitante',email:'visitante@example.com'};
+    const payload={...common,name:'Visitante',email:'visitante@example.com',trackingCode:'CONS-INVENTADO',status:'Aprobada'};
     assert.equal((await guest.call('/backend/data/changeflow.sqlite')).status,404);
     assert.equal((await guest.call('/.env')).status,404);
     assert.equal((await guest.call('/api/public/requests','POST',{...payload,name:''})).status,400);
@@ -89,13 +89,29 @@ test('la solicitud pública no crea cuenta y solo el CCC activo la ve',async()=>
     const response=await guest.call('/api/public/requests','POST',payload);
     assert.equal(response.status,201);
     assert.deepEqual(Object.keys(response.data),['receipt']);
+    assert.match(response.data.receipt.trackingCode,/^CONS-(?:[A-F0-9]{4}-){4}[A-F0-9]{4}$/);
+    assert.notEqual(response.data.receipt.trackingCode,payload.trackingCode);
     assert.equal((await guest.call('/api/requests')).status,401);
     const request=(await ccc.call('/api/requests')).data.requests[0];
     assert.equal(request.ownerId,null);assert.equal(request.name,'Visitante');
+    assert.equal(request.trackingCode,response.data.receipt.trackingCode);
+    assert.equal(request.status,'Pendiente');
     assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM users').get().n,10);
     for(let i=0;i<16;i++)assert.equal((await guest.call('/api/public/requests','POST',payload)).status,201);
+    const codes=app.db.prepare('SELECT tracking_code FROM requests').all().map(row=>row.tracking_code);
+    assert.equal(new Set(codes).size,codes.length);
     assert.equal((await guest.call('/api/public/requests','POST',payload)).status,429);
   } finally {await stop(app);}
+});
+test('el código público persiste al reiniciar y no duplica la solicitud',async()=>{
+  const folder=mkdtempSync(join(tmpdir(),'changeflow-code-')),filename=join(folder,'app.sqlite');let app;
+  try {
+    app=await start(filename);const guest=await client(app);
+    const receipt=(await guest.call('/api/public/requests','POST',{...common,name:'Visitante',email:'visitante@example.com'})).data.receipt;
+    await stop(app);app=null;app=await start(filename);
+    assert.equal(app.db.prepare('SELECT tracking_code FROM requests').get().tracking_code,receipt.trackingCode);
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM requests').get().n,1);
+  } finally {if(app)await stop(app);rmSync(folder,{recursive:true,force:true});}
 });
 test('validación, identidad, edición y códigos de solicitud siguen protegidos',async()=>{
   const app=await start();

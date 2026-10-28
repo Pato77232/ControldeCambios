@@ -14,7 +14,7 @@ const fetch=async(url,options={})=>{
   const body=options.body?JSON.parse(options.body):{};calls.push({url,...options,data:body});
   let result;
   if(url==='/api/auth/me'||url==='/api/auth/login')result={user:active,csrf:'csrf-from-server'};
-  else if(url==='/api/public/requests')result={receipt:{id:'SCR-0008',date:'2026-10-27',status:'Pendiente'}};
+  else if(url==='/api/public/requests')result={receipt:{id:'SCR-0008',trackingCode:'CONS-AAAA-BBBB-CCCC-DDDD-EEEE',date:'2026-10-27',status:'Pendiente'}};
   else if(url==='/api/committee')result={users:active.role==='ccc'?committee:[]};
   else if(url==='/api/requests'&&!options.body)result={nextId:1,requests};
   else if(url==='/api/auth/logout')result={ok:true};
@@ -53,6 +53,7 @@ const submit=async(id,data)=>{FormDataMock.data=data;await node(id).onsubmit({pr
   await submit('#request-form',{...common,name:'Visitante',email:'visitante@example.com'});
   assert.equal(calls.find(c=>c.url==='/api/public/requests').data.requesterType,'usuario');
   assert.match(node('main').innerHTML,/Solicitud enviada/);assert.match(node('main').innerHTML,/SCR-0008/);
+  assert.match(node('main').innerHTML,/CONS-AAAA-BBBB-CCCC-DDDD-EEEE/);
   run("location.hash='#nueva/experto';route()");assert.match(node('main').innerHTML,/id="login-form"/);
   assert.equal(run("esc('<script>')"),'&lt;script&gt;');
   console.log('OK cliente: experto autenticado, CCC sin acceso a nueva solicitud, ruta pública y resolución de un solo CCC.');

@@ -1,4 +1,5 @@
 'use strict';
+const {randomBytes}=require('node:crypto');
 const { publicUser } = require('./auth.cjs');
 class HttpError extends Error { constructor(status,message){super(message);this.status=status;} }
 const fail=(status,message)=>{throw new HttpError(status,message);};
@@ -66,8 +67,13 @@ function createRequest(db,user,data) {
   if(data.requesterType!==kind)fail(403,'El tipo de petición no corresponde a tu perfil.');
   const date=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Guayaquil',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const fields=requestFields(data,kind,date);
-  const inserted=db.prepare('INSERT INTO requests(owner_id,document) VALUES(?,?)').run(user.id,'{}');
-  const r={...fields,id:`SCR-${String(inserted.lastInsertRowid).padStart(4,'0')}`,date,name:user.name,email:user.email,ownerId:user.id,...(guest?{submittedWithoutAccount:true}:{}),requesterType:kind,priority:'Media',status:'Pendiente',revision:0,history:[],resolutions:[],committeeVotes:[]};
+  let trackingCode=null;
+  if(guest){
+    do {const hex=randomBytes(10).toString('hex').toUpperCase();trackingCode=`CONS-${hex.match(/.{4}/g).join('-')}`;}
+    while(db.prepare('SELECT 1 FROM requests WHERE tracking_code=?').get(trackingCode));
+  }
+  const inserted=db.prepare('INSERT INTO requests(owner_id,document,tracking_code) VALUES(?,?,?)').run(user.id,'{}',trackingCode);
+  const r={...fields,id:`SCR-${String(inserted.lastInsertRowid).padStart(4,'0')}`,date,name:user.name,email:user.email,ownerId:user.id,...(guest?{submittedWithoutAccount:true,trackingCode}:{}),requesterType:kind,priority:'Media',status:'Pendiente',revision:0,history:[],resolutions:[],committeeVotes:[]};
   history(r,user,'Solicitud registrada.');save(db,r);return r;
 }
 function mutate(db,id,action,user,data) {

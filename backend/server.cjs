@@ -58,7 +58,7 @@ function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','ch
         if(attempt.count>=20)fail(429,'Has enviado demasiadas solicitudes. Intenta más tarde.');
         attempt.count++;publicAttempts.set(ip,attempt);
         const data=await readJson(req),r=transaction(db,()=>createRequest(db,null,data));
-        json(201,{receipt:{id:r.id,date:r.date,status:r.status}});return;
+        json(201,{receipt:{id:r.id,trackingCode:r.trackingCode,date:r.date,status:r.status}});return;
       }
       const session=getSession(db,req);if(!session)fail(401,'Inicia sesión para continuar.');
       if(mutation && req.headers['x-csrf-token']!==session.csrf)fail(403,'Sesión de formulario inválida. Actualiza la página.');

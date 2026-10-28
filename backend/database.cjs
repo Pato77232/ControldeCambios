@@ -23,6 +23,10 @@ function openDatabase(filename) {
       db.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='requests'").run(sequence);
     });
   }
+  if (!db.prepare("PRAGMA table_info(requests)").all().some(c=>c.name==='tracking_code')) {
+    db.exec('ALTER TABLE requests ADD COLUMN tracking_code TEXT');
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS requests_tracking_code_unique ON requests(tracking_code) WHERE tracking_code IS NOT NULL');
   db.exec("PRAGMA user_version=2");
   return db;
 }
