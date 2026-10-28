@@ -1,4 +1,4 @@
-# Plan e historias de usuario · ChangeFlow
+# Plan e historias de usuario · TransViaje
 
 Fecha: 28 de octubre de 2026. Base revisada: `51f2606` (`main`, 27 de octubre de 2026). Estado: planificación; estas historias no certifican que el comportamiento ya esté implementado.
 

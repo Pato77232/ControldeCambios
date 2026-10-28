@@ -98,7 +98,7 @@ if(require.main===module) {
     const {server}=createApp();
     const port=Number(process.env.PORT||3000),host=process.env.HOST||'127.0.0.1';
     server.on('error',error=>{console.error(`No se pudo iniciar el servidor: ${error.code}. Revisa HOST y PORT en .env.`);process.exitCode=1;server.close();});
-    server.listen(port,host,()=>console.log(`ChangeFlow disponible en http://${host}:${port}`));
+    server.listen(port,host,()=>console.log(`TransViaje disponible en http://${host}:${port}`));
     const close=()=>server.close(()=>process.exit(0));process.on('SIGINT',close);process.on('SIGTERM',close);
   }catch(e){console.error(e.message);process.exitCode=1;}
 }

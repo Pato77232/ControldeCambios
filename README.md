@@ -1,4 +1,4 @@
-# ChangeFlow · Control de cambios de ProyectoBusesUTA
+# TransViaje · Control de cambios
 
 Aplicación académica de la UTA con frontend HTML/CSS/JavaScript, API Node.js y base SQLite. Incluye login, permisos por perfil, análisis y decisión final del único CCC activo. El backend utiliza módulos de Node.js, sin dependencias externas.
 
@@ -127,9 +127,9 @@ La prueba del cliente verifica el formulario experto, el formulario público, la
 
 Para demostrarlo manualmente: entra como Leslie y crea una solicitud; luego entra como DavidMiembroCCC para analizarla y resolverla. Las pestañas del mismo perfil de navegador comparten la cookie de sesión.
 
-## Diseño BusesUTA
+## Diseño TransViaje
 
-Los cuatro formularios utilizan la cabecera BusesUTA, las etapas Solicitud / Análisis / Decisión y las guías de los mockups. La guía lateral pasa debajo del formulario en pantallas pequeñas. Las áreas de texto incluyen contadores y la resolución muestra los resúmenes de solicitud y análisis.
+Los cuatro formularios utilizan la cabecera TransViaje, las etapas Solicitud / Análisis / Decisión y las guías de los mockups. La guía lateral pasa debajo del formulario en pantallas pequeñas. Las áreas de texto incluyen contadores y la resolución muestra los resúmenes de solicitud y análisis.
 
 El tipo de solicitud se conserva en el servidor. El desarrollador puede indicar una prioridad propuesta; el CCC conserva la responsabilidad de establecer la prioridad durante el análisis. Se mantienen los campos requeridos por el flujo y las restricciones por perfil. Los adjuntos siguen registrando solo nombres. Los botones de envío guardan en el servidor; no se simulan borradores ni cargas de archivos.
 

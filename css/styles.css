@@ -1131,7 +1131,7 @@ button:disabled { opacity: .6; cursor: wait; }
 .evaluation dd { margin: 4px 0 0; line-height: 1.5; overflow-wrap: anywhere; }
 #clarification-form { display: grid; gap: 12px; margin: 20px 0; }
 
-/* BusesUTA: lenguaje visual de los cuatro formularios aprobados. */
+/* TransViaje: lenguaje visual de los cuatro formularios aprobados. */
 :root{--navy:#052452;--ink:#092551;--blue:#0068c8;--muted:#647895;--line:#dfe7ef;--bg:#f4f8fb;font-family:'Segoe UI',Arial,sans-serif}
 .main-shell{margin-left:0}.topbar{height:78px;padding:0 32px;gap:25px;color:var(--navy)}
 .bus-brand{display:flex;align-items:center;gap:13px;font-size:29px;letter-spacing:-1px;font-weight:750;white-space:nowrap}.bus-brand b{color:#009ec9}.bus-logo{width:48px;height:48px;border-radius:11px;background:linear-gradient(150deg,#00b8db,#00779f);color:white;display:grid;place-items:center;box-shadow:inset 0 0 0 3px #ffffff30}.bus-logo svg{width:34px;height:34px}.system-title{border-left:1px solid #ccd6df;padding-left:25px;font-size:20px;letter-spacing:-.5px;flex:1}.topbar-right{gap:10px;font-size:12px}.topbar div>span:not(.avatar):not(.demo-tag){margin:0;color:var(--navy)}.topbar-right .btn{font-size:10px;padding:7px 9px}.app-nav{display:flex;justify-content:flex-end;gap:6px;padding:9px 30px;background:#fff;border-bottom:1px solid #edf1f5}.app-nav a{margin:0;padding:7px 12px;color:#5e7290;font-size:11px}.app-nav a:hover{background:#edf7ff;color:var(--blue)}.app-nav a.active{background:#eaf6fd;box-shadow:none;color:var(--blue)}#nav-count{background:#dceefb;border-radius:5px;padding:2px 5px}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}

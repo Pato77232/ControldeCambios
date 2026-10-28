@@ -1,5 +1,5 @@
 {
-  "name": "changeflow-uta",
+  "name": "transviaje-control-cambios",
   "version": "2.0.0",
   "private": true,
   "description": "Gestión de cambios con autenticación y resolución del CCC",

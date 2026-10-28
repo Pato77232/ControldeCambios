@@ -31,7 +31,7 @@ const submit=async(id,data)=>{FormDataMock.data=data;await node(id).onsubmit({pr
 (async()=>{
   run(fs.readFileSync('js/app.js','utf8').replace(/bootstrap\(\);\s*$/,'const ready=bootstrap();'));
   await run('ready');assert.equal(run('currentUser.id'),user.id);assert.equal(run('csrfToken'),'csrf-from-server');
-  run("location.hash='#nueva';route()");assert.match(node('main').innerHTML,/Solicitud de cambio – Experto desarrollador/);assert.match(node('main').innerHTML,/id="specId"/);
+  run("location.hash='#nueva';route()");assert.match(node('main').innerHTML,/Solicitud de cambio – Experto desarrollador/);assert.match(node('main').innerHTML,/id="specId"/);assert.match(node('main').innerHTML,/value="TransViaje"/);
   assert.match(node('main').innerHTML,/id="name"[^>]*readonly/);
   const common={name:user.name,email:user.email,project:'Proyecto',module:'Autenticación y usuarios',title:'Solicitud de prueba',currentBehavior:'Mensaje confuso',description:'Necesitamos mensajes de error comprensibles.',justification:'Ayudará a los usuarios a corregir sus datos.',result:'Mensaje claro',components:'auth',environment:'Pruebas',acceptanceCriteria:'El mensaje es comprensible'};
   await submit('#request-form',{});assert.match(node('#name-error').textContent,/obligatorio/);

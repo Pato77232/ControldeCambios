@@ -1,4 +1,4 @@
-/* ChangeFlow: prototipo sin dependencias. Los datos y el contador se guardan juntos. */
+/* TransViaje: prototipo sin dependencias. Los datos y el contador se guardan juntos. */
 'use strict';
 const STATES = ['Pendiente', 'Aprobada', 'Rechazada', 'Aprobada con condiciones', 'Más información'];
 const RESOLUTIONS = ['Aprobado', 'Aprobado con condiciones', 'Rechazado', 'Más información'];
@@ -10,7 +10,7 @@ const PRIORITIES = ['Baja', 'Media', 'Alta', 'Crítica'];
 const TYPES = ['Corrección de error', 'Nueva funcionalidad', 'Mejora', 'Seguridad', 'Otro'];
 // Catálogo funcional tomado de docs/business-rules.md y de los módulos del repositorio.
 // Incluir un módulo planificado permite documentar propuestas, no afirma que esté implementado.
-const PROJECT_NAME = 'ProyectoBusesUTA · Venta de pasajes interprovinciales';
+const PROJECT_NAME = 'TransViaje';
 const MODULES = ['Autenticación y usuarios', 'Cooperativas', 'Frecuencias y precios por tramo', 'Buses y plantillas de asientos', 'Hojas de ruta', 'Búsqueda de viajes', 'Reservas y pasajeros', 'Pagos y comprobantes', 'Boletos QR e historial', 'Notificaciones', 'Configuración de la aplicación'];
 const ROLES = ['Administrador del Sistema', 'Usuario de Cooperativa', 'Oficinista', 'Cliente', 'Varios roles'];
 const CHANGE_CLASSES = ['Normal', 'Estándar', 'Emergencia'];
@@ -114,7 +114,7 @@ function renderSession() {
   document.querySelector('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST',body:{}});currentUser=null;csrfToken='';store={nextId:1,requests:[]};renderSession();location.hash='nueva/usuario';route();}catch(e){toast(e.message,true);}};
 }
 function loginScreen(message='') {
-  main.innerHTML=heading('Iniciar sesión','Accede con tu cuenta para registrar o revisar solicitudes de cambio.')+`<form id="login-form" class="card login-card"><div class="detail-body"><h2>Acceso a BusesUTA</h2><label for="login-email">Correo electrónico</label><input id="login-email" name="email" type="email" autocomplete="username" required maxlength="200"><label for="login-password">Contraseña</label><input id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="512"><p class="error" id="login-error" role="alert">${esc(message)}</p><button class="btn primary" type="submit">Entrar</button><p><a class="text-link" href="#nueva/usuario">Presentar una solicitud sin cuenta</a></p><p><a class="text-link" href="#consulta">Consultar estado con un código</a></p></div></form>`;
+  main.innerHTML=heading('Iniciar sesión','Accede con tu cuenta para registrar o revisar solicitudes de cambio.')+`<form id="login-form" class="card login-card"><div class="detail-body"><h2>Acceso a TransViaje</h2><label for="login-email">Correo electrónico</label><input id="login-email" name="email" type="email" autocomplete="username" required maxlength="200"><label for="login-password">Contraseña</label><input id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="512"><p class="error" id="login-error" role="alert">${esc(message)}</p><button class="btn primary" type="submit">Entrar</button><p><a class="text-link" href="#nueva/usuario">Presentar una solicitud sin cuenta</a></p><p><a class="text-link" href="#consulta">Consultar estado con un código</a></p></div></form>`;
   document.querySelector('#login-form').onsubmit=async event=>{
     event.preventDefault();const button=event.currentTarget.querySelector('button');button.disabled=true;
     try{const data=await api('/auth/login',{method:'POST',body:Object.fromEntries(new FormData(event.currentTarget))});currentUser=data.user;csrfToken=data.csrf;await loadStore();renderSession();route();}
@@ -284,7 +284,7 @@ function dashboard() {
 </section>
 <section class="card notice">
 <h2>${icon('info')} Tu espacio de demostración</h2>
-<p>Documenta cambios de ProyectoBusesUTA. Las solicitudes, análisis y decisiones se conservan en el servidor.</p>
+<p>Documenta cambios de TransViaje. Las solicitudes, análisis y decisiones se conservan en el servidor.</p>
 <small>Acceso según el perfil de la cuenta</small>
 </section>
 </div>`;
@@ -295,7 +295,7 @@ function options(values, current, placeholder = '') {
 
 }
 function listing() {
-  main.innerHTML = heading('Solicitudes de cambio', 'Consulta, organiza y evalúa los cambios de ProyectoBusesUTA.', newButton()) +
+  main.innerHTML = heading('Solicitudes de cambio', 'Consulta, organiza y evalúa los cambios de TransViaje.', newButton()) +
     `<section class="card">
 <div class="toolbar">
 <div class="search">${icon('search')}<input id="search" type="search" aria-label="Buscar por código o título" placeholder="Buscar por código o título…" value="${esc(filter.search)}">
@@ -421,7 +421,7 @@ function editForm(request, kind = 'usuario') {
   const render = k => field(k,r[k], { area: areas.includes(k), full: areas.includes(k) || ['module','title','project'].includes(k), readonly:!!currentUser && ['name','email'].includes(k), ...(k === 'email' ? {type:'email'} : {}), ...(k === 'desiredDate' ? {type:'date',min:r.date} : {}), ...(k === 'module' ? {options:MODULES,placeholder:'Selecciona un módulo'} : {}), ...(k === 'environment' ? {options:ENVIRONMENTS,placeholder:'Selecciona un entorno'} : {}) });
   main.innerHTML = heading(editing ? 'Editar petición' : `Petición del ${expert ? 'experto desarrollador' : 'usuario final'}`, `${r.id} · La petición se enviará al CCC para su análisis.`) +
     `<form id="request-form" class="form-layout" novalidate><p class="form-note">Los campos con * son obligatorios.</p>${section('1','Datos de la petición','Código y fecha automáticos.',field('id',r.id,{readonly:true,full:true,hint:'Identificador generado automáticamente'}) + common.slice(0,2).map(render).join('') + radioCards('type',expert ? ['Defecto','Mejora','Nueva funcionalidad','Refactorización','Seguridad'] : ['Error','Mejora','Nueva funcionalidad'],r.type || (expert ? 'Defecto' : 'Error'),expert ? ['Corrección de un error en el sistema','Optimización de funcionalidad','Implementación de nueva funcionalidad','Mejora en el código sin cambio funcional','Cambios para mitigar riesgos'] : ['Reporta un problema en el sistema','Solicitud de mejora en una funcionalidad','Propuesta de una nueva funcionalidad']) + common.slice(2).map(render).join(''))}${expert ? section('2','Propuesta técnica','Información aportada por el desarrollador; el CCC realizará su propia evaluación.',technical.map(render).join('') + radioCards('proposedPriority',PRIORITIES,r.proposedPriority || 'Media',['Impacto bajo','Impacto moderado','Impacto alto','Impacto muy alto'])) : ''}${section(expert ? '3' : '2','Información complementaria','Fecha deseada y evidencias opcionales.',render('desiredDate') + render('observations') + `<div class="field full"><label for="attachments">Adjuntar evidencia</label><label class="upload-zone" for="attachments">${icon('attach')}<span><strong>Haga clic para adjuntar archivos</strong><small>Seleccione las evidencias de su solicitud</small></span><input id="attachments" type="file" multiple></label><small class="hint">En este prototipo se registran únicamente los nombres de los archivos.</small><p id="file-names" class="hint">${r.attachments.map(esc).join(', ')}</p><button class="btn" id="clear-files" type="button">Quitar adjuntos</button></div>`)}<div class="form-actions"><a class="btn" href="#solicitudes">Cancelar</a><button class="btn primary">${icon('send')} Enviar solicitud</button></div></form>`;
-  main.innerHTML = formShell(kind, `Solicitud de cambio – ${expert ? 'Experto desarrollador' : 'Usuario final'}`, expert ? 'Este formulario está dirigido al personal técnico que puede proporcionar información detallada sobre software y configuraciones del sistema.' : 'Solicita un cambio en el sistema BusesUTA o reporta un problema. Puedes enviar tu solicitud sin cuenta, indicando tu nombre y correo electrónico.', main.innerHTML.slice(main.innerHTML.indexOf('<form')), r);
+  main.innerHTML = formShell(kind, `Solicitud de cambio – ${expert ? 'Experto desarrollador' : 'Usuario final'}`, expert ? 'Este formulario está dirigido al personal técnico que puede proporcionar información detallada sobre software y configuraciones del sistema.' : 'Solicita un cambio en TransViaje o reporta un problema. Puedes enviar tu solicitud sin cuenta, indicando tu nombre y correo electrónico.', main.innerHTML.slice(main.innerHTML.indexOf('<form')), r);
   let attachments = [...r.attachments];
   const files = document.querySelector('#attachments');
   files.onchange = () => { attachments = Array.from(files.files,f => f.name); document.querySelector('#file-names').textContent = attachments.join(', '); };
