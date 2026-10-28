@@ -109,6 +109,7 @@ async function saveAction(path,body,method='POST') {
 function renderSession() {
   document.querySelector('#session-controls').innerHTML=currentUser ? `<span class="session-avatar" aria-hidden="true">${esc(currentUser.name.split(' ').map(p=>p[0]).slice(0,2).join(''))}</span><span class="session-identity"><strong>${esc(currentUser.name)}</strong><small>${esc({usuario:'Usuario final',experto:'Desarrollador',ccc:'Miembro del CCC'}[currentUser.role])}</small></span><button class="btn" id="refresh-data">Actualizar</button><button class="btn" id="logout">Cerrar sesión</button>` : '<a class="btn" href="#login">Iniciar sesión</a>';
   document.querySelector('#nav-count').textContent=store.requests.length;
+  document.querySelector('[data-nav="nueva"]').hidden=isCommittee();
   if(!currentUser)return;
   document.querySelector('#refresh-data').onclick=async()=>{try{await loadStore();route();toast('Datos actualizados.');}catch(e){toast(e.message,true);}};
   document.querySelector('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST',body:{}});currentUser=null;csrfToken='';CCC_USERS=[];store={nextId:1,requests:[]};renderSession();location.hash='nueva/usuario';route();}catch(e){toast(e.message,true);}};
@@ -180,7 +181,7 @@ function radioCards(key, values, current, descriptions) {
  return `<fieldset class="field full choice-field"><legend>${fieldLabels[key] || esc(key)} <span class="required">*</span></legend><div class="choice-grid">${values.map((v,i)=>`<label class="choice-card"><input type="radio" name="${key}" id="${i===0?key:key+'-'+i}" value="${esc(v)}" ${current===v?'checked':''} required><span><strong>${esc(v)}</strong><small>${descriptions[i]||''}</small></span></label>`).join('')}</div><span class="error" id="${key}-error"></span></fieldset>`;
 }
 function newButton() {
-  return `<a class="btn primary" href="#nueva">${icon('plus')} Nueva solicitud</a>`;
+  return isCommittee() ? '' : `<a class="btn primary" href="#nueva">${icon('plus')} Nueva solicitud</a>`;
 
 }
 function rows(requests) {
@@ -386,12 +387,11 @@ function section(letter, title, subtitle, content) {
 
 }
 function chooseRequest() {
-  if(!isCommittee()){editForm(null,currentUser.role);return;}
-  main.innerHTML = heading('Nueva solicitud', 'Selecciona quién propone el cambio. Ambas opciones siguen el mismo proceso del CCC.') +
-    `<div class="bottom-grid">${[['usuario','Usuario final','Describe el problema y el resultado que necesitas, sin conocimientos técnicos.'],['experto','Experto desarrollador','Documenta la propuesta técnica, sus componentes y criterios de aceptación.']].map(([kind,title,note]) => `<section class="card info-body"><h2>${title}</h2><p>${note}</p><a class="btn primary" href="#nueva/${kind}">Crear petición ${icon('arrow')}</a></section>`).join('')}</div>`;
+  if(isCommittee()) {main.innerHTML=heading('Acción no disponible','El CCC solo revisa solicitudes.');return;}
+  editForm(null,currentUser.role);
 }
 function editForm(request, kind = 'usuario') {
-  if ((request && !canEdit(request)) || (!request && !isCommittee() && kind !== (currentUser?.role || 'usuario'))) {
+  if ((request && !canEdit(request)) || (!request && (isCommittee() || kind !== (currentUser?.role || 'usuario')))) {
     main.innerHTML = heading('Petición bloqueada', 'Una petición analizada o resuelta conserva su información original.') + `<a class="btn" href="#detalle/${request?.id || ''}">Volver al detalle</a>`;
     return;
   }
@@ -613,7 +613,7 @@ function route() {
   if (view === 'solicitudes')
     listing();
   else if (view === 'nueva')
-    ['usuario','experto'].includes(id) ? editForm(null,id) : chooseRequest();
+    isCommittee() ? chooseRequest() : ['usuario','experto'].includes(id) ? editForm(null,id) : chooseRequest();
   else if (['detalle', 'editar', 'analisis', 'decision'].includes(view)) {
     if (selected)
       view === 'detalle' ? detail(selected) : view === 'editar' ? editForm(selected) : committeeForm(selected,view === 'decision');

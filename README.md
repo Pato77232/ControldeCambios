@@ -8,7 +8,7 @@ Requisito: **Node.js 22.13 o superior**, con `node:sqlite` disponible. Verificad
 
 1. Para una instalación nueva, copia `.env.example` a `.env` y establece `SEED_PASSWORD` (mínimo 12 caracteres).
 2. Ejecuta `npm start`. No hace falta `npm install` porque no hay dependencias.
-3. Abre la dirección que muestra la consola. El puerto predeterminado es 3000; en este equipo `.env` utiliza **3010** porque el 3000 estaba ocupado.
+3. Abre la dirección que muestra la consola. El puerto predeterminado es 3000.
 
 ```bash
 npm start
@@ -20,30 +20,29 @@ El frontend y la API se sirven desde el mismo proceso. Abrir `index.html` direct
 
 ## Cuentas iniciales
 
-Al crear una base vacía se generan estas cuatro cuentas, todas con la contraseña inicial definida en `SEED_PASSWORD`:
+Al crear una base vacía se generan diez cuentas, todas con la contraseña inicial definida localmente en `SEED_PASSWORD`:
 
 | Cuenta | Perfil | Acceso |
 |---|---|---|
-| `ana@changeflow.local` | Usuario final | Crea peticiones de usuario, consulta y edita las suyas antes del análisis. |
-| `diego@changeflow.local` | Desarrollador | Crea peticiones técnicas, consulta y edita las suyas antes del análisis. |
-| `carlos@changeflow.local` | CCC | Consulta todas las peticiones, realiza análisis, registra su voto y resoluciones. |
-| `maria@changeflow.local` | CCC | Los mismos permisos que Carlos, con sesión y voto independientes. |
+| `leslie@uta.edu.ec`, `david@uta.edu.ec`, `edwin@uta.edu.ec`, `pablo@uta.edu.ec`, `shirley@uta.edu.ec` | Expertos | Cada uno crea y consulta sus propias solicitudes. |
+| `pablomiembroccc@uta.edu.ec` | CCC activo | Consulta y revisa todas las solicitudes; no puede crear una propia. |
+| `lesliemiembroccc@uta.edu.ec`, `davidmiembroccc@uta.edu.ec`, `edwinmiembroccc@uta.edu.ec`, `shirleymiembroccc@uta.edu.ec` | CCC inactivos | Existen en la base, pero no pueden iniciar sesión. |
 
 La contraseña inicial de las cuentas se configura en `SEED_PASSWORD` dentro de tu `.env` local. `.env` y la base están excluidos de Git y no son accesibles desde el servidor de archivos.
 
-Las cuentas se crean solo una vez. Cambiar `SEED_PASSWORD` no cambia las contraseñas de una base existente. No hay registro público, recuperación de contraseñas ni administración de cuentas en la interfaz.
+Las cuentas se crean solo una vez. Cambiar `SEED_PASSWORD` no cambia las contraseñas de una base existente. No hay registro público, recuperación de contraseñas ni administración de cuentas en la interfaz. Para borrar **todos** los usuarios, sesiones y solicitudes anteriores y volver a cargar estas diez cuentas, ejecuta `SEED_PASSWORD=<clave-de-al-menos-12-caracteres> npm run reset:data` con el servidor detenido. El reinicio de datos no ocurre al arrancar normalmente.
 
 ## Flujo y permisos
 
 ```text
 Formulario público → Petición del usuario final (sin cuenta)
-Login → Petición del usuario final o del desarrollador
+Login → Petición del experto
       → Análisis del CCC
       → Voto individual de cada participante
       → Resolución: aprobado / condicionado / rechazado / más información
 ```
 
-Con sesión iniciada, el nombre y correo del solicitante proceden de su sesión. Sin cuenta, el usuario final proporciona su nombre y correo, que se registran como datos de contacto sin verificar. El correo no vincula la solicitud a una cuenta existente. Un usuario final no puede enviar una petición con perfil de desarrollador. Un miembro del CCC puede crear una petición, pero otro integrante debe analizarla y decidir sobre ella.
+Con sesión iniciada, el nombre y correo del experto proceden de su sesión. Sin cuenta, el usuario final proporciona su nombre y correo, que se registran como datos de contacto sin verificar. El correo no vincula la solicitud a una cuenta existente. El CCC no puede crear solicitudes, ni siquiera mediante la API.
 
 Cada solicitante ve exclusivamente sus peticiones. El CCC puede consultar todas. La edición y eliminación se permiten solo al dueño, mientras la petición esté pendiente y aún no tenga análisis. Las restricciones se validan en el servidor, incluso si alguien intenta saltarse los controles de la interfaz.
 
@@ -53,9 +52,9 @@ El CCC registra impacto, impacto técnico, riesgos, viabilidad, esfuerzo, recurs
 
 ### Votos y resolución
 
-Cada integrante inicia sesión y registra **su propio voto**. Nadie puede registrar el de otra persona. Se seleccionan uno o dos participantes para la resolución; todos deben haber votado y debe incluirse a todos los que ya emitieron un voto vigente. El responsable de registrar la resolución debe ser uno de ellos. El solicitante queda excluido por su ID de cuenta, no por comparar nombres.
+El flujo de voto permanece temporalmente en esta versión: PabloMiembroCCC registra su propio voto antes de la resolución. La historia HU-08 del plan lo sustituirá por una decisión directa. El solicitante queda excluido por su ID de cuenta, no por comparar nombres.
 
-Con un participante, la resolución coincide con su voto. Con dos, requiere unanimidad; ante desacuerdo solo se permite **Más información**. El servidor comprueba los votos almacenados, no acepta votos inventados en el formulario de resolución.
+La resolución actual debe coincidir con el voto registrado por la única cuenta CCC activa.
 
 - **Aprobado:** finaliza la revisión; no significa que el cambio esté implementado.
 - **Aprobado con condiciones:** exige un texto con las restricciones o requisitos y finaliza la revisión.
@@ -118,17 +117,17 @@ Las contraseñas se almacenan mediante scrypt con sal independiente. Las sesione
 
 `COOKIE_SECURE=true` activa la cookie Secure para servir la aplicación mediante HTTPS. El servidor enlaza a `127.0.0.1` por defecto. No incluye infraestructura de despliegue, HTTPS, recuperación de cuentas ni administración empresarial de usuarios.
 
-Los datos antiguos de `localStorage` no se borran ni se importan automáticamente: no tienen identidad autenticada y no se pueden convertir sus nombres en autorizaciones reales. La base del servidor empieza vacía. Para verificar visualmente esta versión se creó una petición claramente marcada como **Demostración**, con aprobación condicionada y votos de ambas cuentas del CCC.
+Los datos antiguos de `localStorage` no se importan automáticamente: no tienen identidad autenticada. La operación `reset:data` vacía la base SQLite y vuelve a crear las diez cuentas acordadas.
 
-Los adjuntos continúan guardando únicamente nombres; no hay subida ni descarga real de archivos. La base contiene datos de demostración y el historial no es una auditoría externa inmutable.
+Los adjuntos continúan guardando únicamente nombres; no hay subida ni descarga real de archivos. El historial no es una auditoría externa inmutable.
 
 ## Validación
 
-`npm test` utiliza una base temporal y servidores locales efímeros. Comprueba login, sesión y logout; intentos fallidos; CSRF; archivos privados; perfiles y visibilidad; validación de campos; identidad no falsificable; edición y eliminación; códigos; análisis previo; votos independientes; aprobación simple y condicionada; rechazo; desacuerdos; solicitud y respuesta de información; revisión independiente; conflictos de versiones; y persistencia al reiniciar.
+`npm test` utiliza bases temporales y servidores locales efímeros. Comprueba las diez cuentas iniciales, la única cuenta CCC activa, permisos por rol, registro público sin cuenta, análisis y resolución actuales, persistencia y reinicio explícito de datos.
 
-La prueba del cliente verifica recuperación de sesión, formulario por perfil, identidad de solo lectura, rutas protegidas y envío de votos/resoluciones a la API. La revisión en navegador completó solicitud, análisis, dos sesiones del CCC, votos separados y aprobación con condiciones.
+La prueba del cliente verifica el formulario experto, el formulario público, la ausencia de «Nueva solicitud» para el CCC y el envío del voto y resolución actuales a la API.
 
-Para demostrarlo manualmente: entra como Ana y crea una solicitud; entra como Carlos para analizarla y votar; entra como María para votar y resolver. Para simular participantes simultáneos utiliza perfiles de navegador distintos, ya que las pestañas del mismo perfil comparten la cookie de sesión.
+Para demostrarlo manualmente: entra como Leslie y crea una solicitud; luego entra como PabloMiembroCCC para analizarla y resolverla. Las pestañas del mismo perfil de navegador comparten la cookie de sesión.
 
 ## Diseño BusesUTA
 

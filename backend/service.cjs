@@ -27,7 +27,7 @@ function snapshot(db,user) {
   const seq=db.prepare("SELECT seq FROM sqlite_sequence WHERE name='requests'").get();
   return {nextId:Number(seq?.seq || 0)+1,requests:rows.map(x=>JSON.parse(x.document))};
 }
-function committee(db){return db.prepare("SELECT id,name,email,role FROM users WHERE role='ccc' ORDER BY id").all().map(publicUser);}
+function committee(db){return db.prepare("SELECT id,name,email,role FROM users WHERE role='ccc' AND active=1 ORDER BY id").all().map(publicUser);}
 function authorizeCommittee(r,user){if(user.role!=='ccc')fail(403,'Solo el CCC puede realizar esta acción.');if(r.ownerId===user.id)fail(403,'No puedes evaluar ni resolver tu propia solicitud.');if(!open(r))fail(409,'Esta solicitud ya tiene una resolución definitiva.');}
 function checkRevision(r,data){if(data.revision!==r.revision)fail(409,'La solicitud cambió. Actualiza el expediente antes de guardar.');}
 function history(r,user,note){r.history.push({status:r.status,date:new Date().toISOString(),responsible:user.name,responsibleId:user.id,note});}
@@ -55,14 +55,15 @@ function requestFields(data,kind,date) {
 }
 function createRequest(db,user,data) {
   const guest=!user;
+  if(user?.role==='ccc')fail(403,'El CCC solo revisa solicitudes.');
   if(guest) {
     if(data.requesterType!=='usuario')fail(403,'Solo las solicitudes de usuario final pueden enviarse sin cuenta.');
     const name=text(data,'name',true,200),email=text(data,'email',true,200).toLowerCase();
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail(400,'Ingresa un correo válido.');
     user={id:null,name,email,role:'usuario'};
   }
-  const kind=user.role==='ccc' ? option(data.requesterType,['usuario','experto'],'un tipo de petición') : user.role;
-  if(user.role!=='ccc' && data.requesterType!==kind)fail(403,'El tipo de petición no corresponde a tu perfil.');
+  const kind=user.role;
+  if(data.requesterType!==kind)fail(403,'El tipo de petición no corresponde a tu perfil.');
   const date=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Guayaquil',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const fields=requestFields(data,kind,date);
   const inserted=db.prepare('INSERT INTO requests(owner_id,document) VALUES(?,?)').run(user.id,'{}');

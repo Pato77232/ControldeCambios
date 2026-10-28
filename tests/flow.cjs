@@ -7,8 +7,8 @@ function node(id){
   if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',innerHTML:'',hidden:false,dataset:{},classList:{toggle(){}},setAttribute(){},removeAttribute(){},addEventListener(){},focus(){},querySelector:node,querySelectorAll:()=>[],showModal(){}});
   return nodes.get(id);
 }
-const user={id:'user-ana',name:'Ana Martínez',email:'ana@changeflow.local',role:'usuario'};
-const committee=[{id:'ccc-carlos',name:'Carlos Pérez',role:'ccc'},{id:'ccc-maria',name:'María López',role:'ccc'}];
+const user={id:'expert-leslie',name:'Leslie',email:'leslie@uta.edu.ec',role:'experto'};
+const committee=[{id:'ccc-pablo',name:'PabloMiembroCCC',role:'ccc'}];
 let active=user,requests=[],calls=[];
 const fetch=async(url,options={})=>{
   const body=options.body?JSON.parse(options.body):{};calls.push({url,...options,data:body});
@@ -30,20 +30,22 @@ const submit=async(id,data)=>{FormDataMock.data=data;await node(id).onsubmit({pr
 (async()=>{
   run(fs.readFileSync('js/app.js','utf8').replace(/bootstrap\(\);\s*$/,'const ready=bootstrap();'));
   await run('ready');assert.equal(run('currentUser.id'),user.id);assert.equal(run('csrfToken'),'csrf-from-server');
-  run("location.hash='#nueva';route()");assert.match(node('main').innerHTML,/Solicitud de cambio – Usuario final/);assert.doesNotMatch(node('main').innerHTML,/id="specId"/);
+  run("location.hash='#nueva';route()");assert.match(node('main').innerHTML,/Solicitud de cambio – Experto desarrollador/);assert.match(node('main').innerHTML,/id="specId"/);
   assert.match(node('main').innerHTML,/id="name"[^>]*readonly/);
-  const common={name:user.name,email:user.email,project:'Proyecto',module:'Autenticación y usuarios',title:'Solicitud de prueba',currentBehavior:'Mensaje confuso',description:'Necesitamos mensajes de error comprensibles.',justification:'Ayudará a los usuarios a corregir sus datos.',result:'Mensaje claro'};
+  const common={name:user.name,email:user.email,project:'Proyecto',module:'Autenticación y usuarios',title:'Solicitud de prueba',currentBehavior:'Mensaje confuso',description:'Necesitamos mensajes de error comprensibles.',justification:'Ayudará a los usuarios a corregir sus datos.',result:'Mensaje claro',components:'auth',environment:'Pruebas',acceptanceCriteria:'El mensaje es comprensible'};
   await submit('#request-form',{});assert.match(node('#name-error').textContent,/obligatorio/);
   await submit('#request-form',common);assert.equal(context.location.hash,'detalle/SCR-0007');
-  const create=calls.find(c=>c.url==='/api/requests'&&c.method==='POST');assert.equal(create.data.requesterType,'usuario');assert.equal(create.headers['X-CSRF-Token'],'csrf-from-server');
+  const create=calls.find(c=>c.url==='/api/requests'&&c.method==='POST');assert.equal(create.data.requesterType,'experto');assert.equal(create.headers['X-CSRF-Token'],'csrf-from-server');
   run('committeeForm(store.requests[0])');assert.match(node('main').innerHTML,/Solo un miembro independiente/);
   active=committee[0];context.committeeUser=active;run('currentUser=committeeUser');await run('loadStore()');
-  requests[0].analysis={analyst:'Carlos Pérez',impact:'Medio',feasibility:'Viable',effort:'24 horas',considerations:'Revisar pruebas'};requests[0].committeeVotes=[];
+  run('renderSession()');assert.equal(node('[data-nav="nueva"]').hidden,true);
+  run("location.hash='#nueva';route()");assert.match(node('main').innerHTML,/El CCC solo revisa solicitudes/);assert.doesNotMatch(node('main').innerHTML,/id="request-form"/);
+  requests[0].analysis={analyst:'PabloMiembroCCC',impact:'Medio',feasibility:'Viable',effort:'24 horas',considerations:'Revisar pruebas'};requests[0].committeeVotes=[];
   run('resolutionForm(store.requests[0])');assert.match(node('main').innerHTML,/id="own-vote"/);assert.doesNotMatch(node('main').innerHTML,/id="vote2"/);
   node('#own-vote').value='Aprobado';await submit('#vote-form',{});
   const vote=calls.find(c=>c.url.endsWith('/vote'));assert.deepEqual(vote.data,{decision:'Aprobado',revision:1});assert.equal(vote.data.id,undefined);
-  await submit('#resolution-form',{member1:'ccc-carlos',member2:'ccc-maria',decision:'Aprobado',decisionNote:'Ambos están de acuerdo'});
-  const resolution=calls.find(c=>c.url.endsWith('/resolution'));assert.deepEqual(resolution.data.members,['ccc-carlos','ccc-maria']);assert.equal(resolution.data.votes,undefined);assert.equal(resolution.data.responsible,undefined);
+  await submit('#resolution-form',{member1:'ccc-pablo',member2:'',decision:'Aprobado',decisionNote:'La revisión es favorable'});
+  const resolution=calls.find(c=>c.url.endsWith('/resolution'));assert.deepEqual(resolution.data.members,['ccc-pablo']);assert.equal(resolution.data.votes,undefined);assert.equal(resolution.data.responsible,undefined);
   run("currentUser=null;location.hash='#login';route()");assert.match(node('main').innerHTML,/id="login-form"/);
   run("location.hash='#nueva/usuario';route()");assert.match(node('main').innerHTML,/id="request-form"/);
   assert.doesNotMatch(node('main').innerHTML,/id="name"[^>]*readonly/);
@@ -53,5 +55,5 @@ const submit=async(id,data)=>{FormDataMock.data=data;await node(id).onsubmit({pr
   assert.match(node('main').innerHTML,/Solicitud enviada/);assert.match(node('main').innerHTML,/SCR-0008/);
   run("location.hash='#nueva/experto';route()");assert.match(node('main').innerHTML,/id="login-form"/);
   assert.equal(run("esc('<script>')"),'&lt;script&gt;');
-  console.log('OK cliente: sesión, formulario por perfil, identidad de solo lectura, rutas protegidas y envío de voto propio/resolución a la API.');
+  console.log('OK cliente: experto autenticado, CCC sin acceso a nueva solicitud, ruta pública y resolución de un solo CCC.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

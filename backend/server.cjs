@@ -46,7 +46,7 @@ function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','ch
         if(attempt.count>=10)fail(429,'Demasiados intentos. Espera 15 minutos.');
         if(typeof data.email!=='string'||typeof data.password!=='string'||data.email.length>200||data.password.length>512)fail(400,'Credenciales inválidas.');
         const user=db.prepare('SELECT * FROM users WHERE email=?').get(data.email.trim().toLowerCase());
-        if(!verifyPassword(data.password,user?.password_hash||dummyHash)){attempt.count++;attempts.set(ip,attempt);fail(401,'Correo o contraseña incorrectos.');}
+        if(!verifyPassword(data.password,user?.password_hash||dummyHash)||!user?.active){attempt.count++;attempts.set(ip,attempt);fail(401,'Correo o contraseña incorrectos.');}
         attempts.delete(ip);
         const previous=getSession(db,req);if(previous)db.prepare('DELETE FROM sessions WHERE token_hash=?').run(previous.token_hash);
         const session=createSession(db,user.id);res.setHeader('Set-Cookie',cookie(session.token));json(200,{user:publicUser(user),csrf:session.csrf});return;

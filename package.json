@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env backend/server.cjs",
     "test": "node --test tests/backend.test.cjs && node tests/flow.cjs",
-    "check": "node --check js/app.js && node --check backend/server.cjs"
+    "check": "node --check js/app.js && node --check backend/server.cjs && node --check backend/reset-data.cjs",
+    "reset:data": "node backend/reset-data.cjs"
   }
 }
