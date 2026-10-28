@@ -89,11 +89,12 @@ tests/
 
 ## API
 
-Las rutas de login y `POST /api/public/requests` no requieren sesión; las demás rutas de API sí. Las modificaciones autenticadas, salvo login, requieren el encabezado `X-CSRF-Token`, obtenido al iniciar o recuperar la sesión. Todas las modificaciones de una petición existente requieren su `revision` actual en el cuerpo JSON.
+Las rutas de login, `POST /api/public/requests` y `GET /api/public/status` no requieren sesión; las demás rutas de API sí. Las modificaciones autenticadas, salvo login, requieren el encabezado `X-CSRF-Token`, obtenido al iniciar o recuperar la sesión. Todas las modificaciones de una petición existente requieren su `revision` actual en el cuerpo JSON.
 
 | Método y ruta | Uso |
 |---|---|
 | `POST /api/public/requests` | Crear una solicitud de usuario final sin cuenta; devuelve solo un comprobante con código, fecha y estado. |
+| `GET /api/public/status?code=...` | Consultar etapa, resultado y línea de tiempo pública con un código de seguimiento. |
 | `POST /api/auth/login` | Correo y contraseña; establece cookie y devuelve usuario y token CSRF. |
 | `GET /api/auth/me` | Recuperar identidad y token CSRF de la sesión vigente. |
 | `POST /api/auth/logout` | Revocar la sesión. |
@@ -139,6 +140,6 @@ El tipo de solicitud se conserva en el servidor. El desarrollador puede indicar 
 
 Al abrir la aplicación sin sesión se muestra directamente el formulario de usuario final. El enlace **Iniciar sesión** permite entrar a las funciones de desarrollador, CCC y consulta de solicitudes propias de cuentas existentes.
 
-El visitante indica nombre y correo, completa el formulario y recibe un código como comprobante. Su solicitud queda disponible para el CCC. No se crea una cuenta ni una sesión, y no se permite consultar, editar o eliminar solicitudes públicas desde el navegador anónimo. El código no es una credencial de acceso. No se envían correos automáticos ni se verifica la titularidad del correo en este prototipo.
+El visitante indica nombre y correo, completa el formulario y recibe un código aleatorio `CONS-…` en el comprobante. Desde **Consultar estado** puede introducirlo después, sin cuenta, para ver únicamente etapa, fechas, resultado y resúmenes generales. No se permite editar ni eliminar la solicitud desde la consulta pública. Quien tenga el código puede consultar ese resumen: debe guardarlo. No se envían correos automáticos ni se verifica la titularidad del correo en este prototipo.
 
-El endpoint público admite únicamente solicitudes de usuario final y no devuelve el expediente ni el listado. Valida campos, origen y contenido JSON, y limita los intentos a 20 por hora por dirección IP. La migración a la versión 2 permite solicitudes sin propietario de cuenta conservando los registros y el contador de códigos anteriores.
+El endpoint de registro admite únicamente solicitudes de usuario final y no devuelve el expediente ni el listado. Valida campos, origen y contenido JSON, y limita los envíos a 20 por hora por dirección IP. La consulta pública limita los intentos a 30 por hora por dirección IP y nunca devuelve nombre, correo, título, descripción, justificación ni análisis completo. Los comprobantes anteriores que solo tenían `SCR-000n` pueden consultar su resumen si corresponden a una solicitud pública anterior sin código `CONS`; las solicitudes nuevas no se consultan por `SCR-000n`.

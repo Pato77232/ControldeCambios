@@ -4,7 +4,7 @@ const path=require('node:path');
 const fs=require('node:fs');
 const {openDatabase,transaction}=require('./database.cjs');
 const {publicUser,verifyPassword,hashPassword,seedUsers,createSession,getSession}=require('./auth.cjs');
-const {HttpError,fail,snapshot,committee,createRequest,mutate}=require('./service.cjs');
+const {HttpError,fail,snapshot,publicStatus,committee,createRequest,mutate}=require('./service.cjs');
 const ROOT=path.resolve(__dirname,'..');
 const STATIC=new Map([['/','index.html'],['/index.html','index.html'],['/wireframe.html','wireframe.html'],['/js/app.js','js/app.js'],['/js/print.js','js/print.js'],['/css/styles.css','css/styles.css']]);
 async function readJson(req) {
@@ -19,6 +19,7 @@ function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','ch
   const db=openDatabase(filename);
   try{seedUsers(db,seedPassword);}catch(e){db.close();throw e;}
   const publicAttempts=new Map();
+  const lookupAttempts=new Map();
   const attempts=new Map(),dummyHash=hashPassword('Unused-Dummy-Password');
   const cookie=token=>`changeflow_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${token?28800:0}${secureCookies?'; Secure':''}`;
   const server=http.createServer(async(req,res)=>{
@@ -59,6 +60,14 @@ function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','ch
         attempt.count++;publicAttempts.set(ip,attempt);
         const data=await readJson(req),r=transaction(db,()=>createRequest(db,null,data));
         json(201,{receipt:{id:r.id,trackingCode:r.trackingCode,date:r.date,status:r.status}});return;
+      }
+      if(route==='/api/public/status'&&req.method==='GET') {
+        const now=Date.now(),ip=req.socket.remoteAddress;
+        for(const [key,value] of lookupAttempts)if(value.until<now)lookupAttempts.delete(key);
+        const attempt=lookupAttempts.get(ip)||{count:0,until:now+60*60*1000};
+        if(attempt.count>=30)fail(429,'Demasiadas consultas. Intenta más tarde.');
+        attempt.count++;lookupAttempts.set(ip,attempt);
+        json(200,{request:publicStatus(db,url.searchParams.get('code'))});return;
       }
       const session=getSession(db,req);if(!session)fail(401,'Inicia sesión para continuar.');
       if(mutation && req.headers['x-csrf-token']!==session.csrf)fail(403,'Sesión de formulario inválida. Actualiza la página.');

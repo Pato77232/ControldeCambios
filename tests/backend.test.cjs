@@ -113,6 +113,60 @@ test('el código público persiste al reiniciar y no duplica la solicitud',async
     assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM requests').get().n,1);
   } finally {if(app)await stop(app);rmSync(folder,{recursive:true,force:true});}
 });
+test('consulta pública por código muestra solo estado y resúmenes neutros',async()=>{
+  const app=await start();
+  try {
+    const guest=await client(app),ccc=await client(app,'pablomiembroccc@uta.edu.ec'),expert=await client(app,'leslie@uta.edu.ec');
+    const payload={...common,name:'Nombre privado',email:'privado@example.com',title:'Título privado',description:'Descripción privada de la solicitud.'};
+    const receipt=(await guest.call('/api/public/requests','POST',payload)).data.receipt;
+    const endpoint=code=>`/api/public/status?code=${encodeURIComponent(code)}`;
+    let response=await guest.call(endpoint(receipt.trackingCode));
+    assert.equal(response.status,200);
+    assert.equal(response.data.request.stage,'No analizada');
+    assert.equal(response.data.request.timeline.length,1);
+    for(const secret of ['Nombre privado','privado@example.com','Título privado','Descripción privada'])assert.ok(!JSON.stringify(response.data).includes(secret));
+    assert.equal((await guest.call(endpoint(receipt.id))).status,404);
+    assert.equal((await guest.call(endpoint('CONS-INVALIDO'))).status,404);
+    assert.equal((await guest.call(endpoint('CONS-0000-0000-0000-0000-0000'))).status,404);
+    const expertCreated=await expert.call('/api/requests','POST',expertRequest);
+    assert.equal((await guest.call(endpoint(expertCreated.data.request.id))).status,404);
+    let r=(await ccc.call('/api/requests')).data.requests.find(item=>item.id===receipt.id);
+    response=await ccc.call(`/api/requests/${r.id}/analysis`,'POST',{...analysis,revision:r.revision});assert.equal(response.status,200);r=response.data.request;
+    response=await guest.call(endpoint(receipt.trackingCode));
+    assert.equal(response.data.request.stage,'Analizada');assert.equal(response.data.request.timeline.length,2);
+    response=await ccc.call(`/api/requests/${r.id}/vote`,'POST',{decision:'Más información',revision:r.revision});r=response.data.request;
+    response=await ccc.call(`/api/requests/${r.id}/resolution`,'POST',{members:['ccc-pablo'],decision:'Más información',decisionNote:'Detalle privado de la decisión',revision:r.revision});assert.equal(response.status,200);
+    response=await guest.call(endpoint(receipt.trackingCode));
+    assert.equal(response.data.request.stage,'Decisión ya tomada');
+    assert.equal(response.data.request.result,'Más información');
+    assert.match(response.data.request.contactNotice,/comunícate/);
+    assert.equal(response.data.request.timeline.length,3);
+    assert.ok(!JSON.stringify(response.data).includes('Detalle privado'));
+  } finally {await stop(app);}
+});
+test('los códigos SCR anteriores consultan solo solicitudes públicas sin código nuevo',async()=>{
+  const app=await start();
+  try {
+    const row=app.db.prepare('INSERT INTO requests(owner_id,document,tracking_code) VALUES(NULL,?,NULL)').run('{}');
+    const id=`SCR-${String(row.lastInsertRowid).padStart(4,'0')}`;
+    app.db.prepare('UPDATE requests SET document=? WHERE id=?').run(JSON.stringify({id,date:'2026-10-28',status:'Pendiente',name:'Privado',title:'Privado',history:[]}),row.lastInsertRowid);
+    const guest=await client(app);
+    const response=await guest.call(`/api/public/status?code=${id}`);
+    assert.equal(response.status,200);
+    assert.equal(response.data.request.id,id);
+    assert.ok(!JSON.stringify(response.data).includes('Privado'));
+    assert.equal((await guest.call(`/api/public/status?code=${id}1`)).status,404);
+    assert.equal((await guest.call(`/api/public/status?code=SCR-${'9'.repeat(80)}`)).status,404);
+  } finally {await stop(app);}
+});
+test('la consulta pública limita intentos repetidos',async()=>{
+  const app=await start();
+  try {
+    const guest=await client(app);
+    for(let i=0;i<30;i++)assert.equal((await guest.call('/api/public/status?code=CONS-INVALIDO')).status,404);
+    assert.equal((await guest.call('/api/public/status?code=CONS-INVALIDO')).status,429);
+  } finally {await stop(app);}
+});
 test('validación, identidad, edición y códigos de solicitud siguen protegidos',async()=>{
   const app=await start();
   try {

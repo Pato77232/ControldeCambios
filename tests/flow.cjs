@@ -15,6 +15,7 @@ const fetch=async(url,options={})=>{
   let result;
   if(url==='/api/auth/me'||url==='/api/auth/login')result={user:active,csrf:'csrf-from-server'};
   else if(url==='/api/public/requests')result={receipt:{id:'SCR-0008',trackingCode:'CONS-AAAA-BBBB-CCCC-DDDD-EEEE',date:'2026-10-27',status:'Pendiente'}};
+  else if(url.startsWith('/api/public/status?'))result={request:{id:'SCR-0008',stage:'No analizada',result:null,contactNotice:null,timeline:[{stage:'No analizada',date:'2026-10-27',summary:'Solicitud registrada.'}]}};
   else if(url==='/api/committee')result={users:active.role==='ccc'?committee:[]};
   else if(url==='/api/requests'&&!options.body)result={nextId:1,requests};
   else if(url==='/api/auth/logout')result={ok:true};
@@ -54,6 +55,12 @@ const submit=async(id,data)=>{FormDataMock.data=data;await node(id).onsubmit({pr
   assert.equal(calls.find(c=>c.url==='/api/public/requests').data.requesterType,'usuario');
   assert.match(node('main').innerHTML,/Solicitud enviada/);assert.match(node('main').innerHTML,/SCR-0008/);
   assert.match(node('main').innerHTML,/CONS-AAAA-BBBB-CCCC-DDDD-EEEE/);
+  assert.match(node('main').innerHTML,/#consulta/);
+  run("location.hash='#consulta';route()");assert.match(node('main').innerHTML,/id="status-form"/);
+  node('#tracking-code').value='CONS-AAAA-BBBB-CCCC-DDDD-EEEE';
+  await submit('#status-form',{});
+  assert.ok(calls.some(c=>c.url.includes('/api/public/status?code=CONS-AAAA-BBBB-CCCC-DDDD-EEEE')));
+  assert.match(node('#status-result').innerHTML,/No analizada/);
   run("location.hash='#nueva/experto';route()");assert.match(node('main').innerHTML,/id="login-form"/);
   assert.equal(run("esc('<script>')"),'&lt;script&gt;');
   console.log('OK cliente: experto autenticado, CCC sin acceso a nueva solicitud, ruta pública y resolución de un solo CCC.');

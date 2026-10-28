@@ -1148,3 +1148,8 @@ main{max-width:1440px;padding:22px 28px 30px}.workflow{position:relative;min-hei
 .fields>.full{grid-column:1/-1}
 .summary-pair{display:grid;grid-template-columns:1fr 1fr;gap:14px}.summary-pair .request-summary dl{grid-template-columns:1fr;gap:0;padding:7px 14px}.summary-pair .request-summary dl>div{display:grid;grid-template-columns:1fr 1.2fr;gap:12px;padding:10px 0;border-bottom:1px solid #eff3f7}.summary-pair .request-summary dl>div:last-child{border:0}.summary-pair .request-summary dt{margin:0}.resolution-options strong{display:block;margin-top:5px;font-size:12px;line-height:1.4}.resolution-options small{display:block;font-size:11px;line-height:1.5;color:#7186a1;font-weight:400;margin-top:5px}.decision-symbol{width:27px;height:27px;border-radius:50%;display:grid;place-items:center;color:#fff;background:#4db18a}.decision-symbol svg{width:19px;height:19px}.symbol-1{color:#ee9d00;background:#fff0bd}.symbol-2{background:#f13d45}.symbol-3{background:#1c9cea}
 @media(max-width:650px){.summary-pair{grid-template-columns:1fr}}
+.app-nav{flex-wrap:wrap}
+#status-form{display:grid;gap:12px;max-width:600px}
+#status-form label,.receipt label{display:block;font-weight:650}
+#tracking-code,#receipt-code{width:100%;max-width:600px;font-family:monospace;letter-spacing:.03em}
+#status-result{margin-top:24px}

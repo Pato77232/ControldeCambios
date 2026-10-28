@@ -28,6 +28,27 @@ function snapshot(db,user) {
   const seq=db.prepare("SELECT seq FROM sqlite_sequence WHERE name='requests'").get();
   return {nextId:Number(seq?.seq || 0)+1,requests:rows.map(x=>JSON.parse(x.document))};
 }
+function publicStatus(db,input) {
+  const code=String(input||'').trim().toUpperCase();
+  const isTracking=/^CONS-(?:[A-F0-9]{4}-){4}[A-F0-9]{4}$/.test(code);
+  const isLegacy=/^SCR-\d{4,}$/.test(code);
+  if(!isTracking&&!isLegacy)fail(404,'No encontramos una solicitud con ese código.');
+  const legacyId=isLegacy?Number(code.slice(4)):null;
+  if(isLegacy&&(!Number.isSafeInteger(legacyId)||legacyId<1))fail(404,'No encontramos una solicitud con ese código.');
+  const row=isTracking
+    ? db.prepare('SELECT document FROM requests WHERE tracking_code=? AND owner_id IS NULL').get(code)
+    : db.prepare('SELECT document FROM requests WHERE id=? AND tracking_code IS NULL AND owner_id IS NULL').get(legacyId);
+  if(!row)fail(404,'No encontramos una solicitud con ese código.');
+  const r=JSON.parse(row.document);
+  if(isLegacy&&r.id!==code)fail(404,'No encontramos una solicitud con ese código.');
+  const decided=r.status!=='Pendiente';
+  const stage=decided?'Decisión ya tomada':r.analysis?'Analizada':'No analizada';
+  const result=decided?(r.decision?.decision||({'Aprobada':'Aprobado','Aprobada con condiciones':'Aprobado con condiciones','Rechazada':'Rechazado','Más información':'Más información'}[r.status]||null)):null;
+  const timeline=[{stage:'No analizada',date:r.history?.[0]?.date||r.date,summary:'Solicitud registrada.'}];
+  if(r.analysis?.date)timeline.push({stage:'Analizada',date:r.analysis.date,summary:'Análisis completado.'});
+  if(decided&&r.decision?.date)timeline.push({stage:'Decisión ya tomada',date:r.decision.date,summary:`Resultado: ${result}.`});
+  return {id:r.id,stage,result,timeline,contactNotice:result==='Más información'?'Para aclaraciones, comunícate con un experto o miembro del CCC.':null};
+}
 function committee(db){return db.prepare("SELECT id,name,email,role FROM users WHERE role='ccc' AND active=1 ORDER BY id").all().map(publicUser);}
 function authorizeCommittee(r,user){if(user.role!=='ccc')fail(403,'Solo el CCC puede realizar esta acción.');if(r.ownerId===user.id)fail(403,'No puedes evaluar ni resolver tu propia solicitud.');if(!open(r))fail(409,'Esta solicitud ya tiene una resolución definitiva.');}
 function checkRevision(r,data){if(data.revision!==r.revision)fail(409,'La solicitud cambió. Actualiza el expediente antes de guardar.');}
@@ -122,4 +143,4 @@ function mutate(db,id,action,user,data) {
   }
   return save(db,r);
 }
-module.exports={HttpError,fail,snapshot,committee,createRequest,mutate};
+module.exports={HttpError,fail,snapshot,publicStatus,committee,createRequest,mutate};

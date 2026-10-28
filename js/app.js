@@ -3,7 +3,7 @@
 const STATES = ['Pendiente', 'Aprobada', 'Rechazada', 'Aprobada con condiciones', 'Más información'];
 const RESOLUTIONS = ['Aprobado', 'Aprobado con condiciones', 'Rechazado', 'Más información'];
 const RESOLUTION_STATES = { 'Aprobado': 'Aprobada', 'Aprobado con condiciones': 'Aprobada con condiciones', 'Rechazado': 'Rechazada', 'Más información': 'Más información' };
-let CCC_USERS = [], currentUser = null, csrfToken = '', saving = false;
+let CCC_USERS = [], currentUser = null, csrfToken = '', saving = false, lastPublicCode = '';
 function canReview(r) { return ['Pendiente', 'Más información'].includes(r.status); }
 
 const PRIORITIES = ['Baja', 'Media', 'Alta', 'Crítica'];
@@ -115,12 +115,28 @@ function renderSession() {
   document.querySelector('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST',body:{}});currentUser=null;csrfToken='';CCC_USERS=[];store={nextId:1,requests:[]};renderSession();location.hash='nueva/usuario';route();}catch(e){toast(e.message,true);}};
 }
 function loginScreen(message='') {
-  main.innerHTML=heading('Iniciar sesión','Accede con tu cuenta para registrar o revisar solicitudes de cambio.')+`<form id="login-form" class="card login-card"><div class="detail-body"><h2>Acceso a BusesUTA</h2><label for="login-email">Correo electrónico</label><input id="login-email" name="email" type="email" autocomplete="username" required maxlength="200"><label for="login-password">Contraseña</label><input id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="512"><p class="error" id="login-error" role="alert">${esc(message)}</p><button class="btn primary" type="submit">Entrar</button><p><a class="text-link" href="#nueva/usuario">Presentar una solicitud sin cuenta</a></p></div></form>`;
+  main.innerHTML=heading('Iniciar sesión','Accede con tu cuenta para registrar o revisar solicitudes de cambio.')+`<form id="login-form" class="card login-card"><div class="detail-body"><h2>Acceso a BusesUTA</h2><label for="login-email">Correo electrónico</label><input id="login-email" name="email" type="email" autocomplete="username" required maxlength="200"><label for="login-password">Contraseña</label><input id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="512"><p class="error" id="login-error" role="alert">${esc(message)}</p><button class="btn primary" type="submit">Entrar</button><p><a class="text-link" href="#nueva/usuario">Presentar una solicitud sin cuenta</a></p><p><a class="text-link" href="#consulta">Consultar estado con un código</a></p></div></form>`;
   document.querySelector('#login-form').onsubmit=async event=>{
     event.preventDefault();const button=event.currentTarget.querySelector('button');button.disabled=true;
     try{const data=await api('/auth/login',{method:'POST',body:Object.fromEntries(new FormData(event.currentTarget))});currentUser=data.user;csrfToken=data.csrf;await loadStore();renderSession();route();}
     catch(e){document.querySelector('#login-error').textContent=e.message;}
     finally{button.disabled=false;}
+  };
+}
+function publicStatusScreen() {
+  main.innerHTML=heading('Consultar estado de solicitud','Ingresa el código que recibiste al enviar tu solicitud. No necesitas una cuenta.')+`<section class="card info-body"><form id="status-form"><label for="tracking-code">Código de seguimiento</label><input id="tracking-code" name="code" required maxlength="64" autocomplete="off" value="${esc(lastPublicCode)}" placeholder="CONS-… o SCR-0001"><p class="hint">Si tu comprobante anterior solo muestra un código SCR, también puedes usarlo.</p><button class="btn primary" type="submit">Ver estado de solicitud</button></form><p id="status-error" class="error" role="alert"></p><div id="status-result" aria-live="polite"></div></section>`;
+  document.querySelector('#status-form').onsubmit=async event=>{
+    event.preventDefault();
+    const code=document.querySelector('#tracking-code').value.trim().toUpperCase();
+    const error=document.querySelector('#status-error'),result=document.querySelector('#status-result');
+    error.textContent='';result.innerHTML='';
+    if(!code){error.textContent='Ingresa tu código de seguimiento.';return;}
+    try {
+      const data=await api(`/public/status?code=${encodeURIComponent(code)}`);
+      lastPublicCode=code;
+      const r=data.request;
+      result.innerHTML=`<div class="detail-body"><h2>Solicitud ${esc(r.id)}</h2><p>Etapa actual: <strong>${esc(r.stage)}</strong></p>${r.result?`<p>Resultado: <strong>${esc(r.result)}</strong></p>`:''}${r.contactNotice?`<p>${esc(r.contactNotice)}</p>`:''}<h3>Seguimiento</h3><ol class="history">${r.timeline.map(item=>`<li><strong>${esc(item.stage)}</strong><small>${dateLabel(item.date,true)}</small><p>${esc(item.summary)}</p></li>`).join('')}</ol></div>`;
+    } catch(e) {error.textContent=e.message;}
   };
 }
 async function bootstrap() {
@@ -432,7 +448,8 @@ function editForm(request, kind = 'usuario') {
       const button=form.querySelector('button.primary');button.disabled=true;
       try {
         const result=await api('/public/requests',{method:'POST',body:{...data,requesterType:'usuario',attachments}});
-        main.innerHTML=heading('Solicitud enviada','El Comité de Control de Cambios recibió tu solicitud.')+`<section class="card info-body receipt"><h2>${icon('check')} Solicitud ${esc(result.receipt.id)}</h2><label for="receipt-code">Código de seguimiento</label><input id="receipt-code" value="${esc(result.receipt.trackingCode)}" readonly aria-describedby="receipt-help"><p id="receipt-help">Guarda este código para consultar después el estado sin iniciar sesión. Selecciónalo y cópialo.</p><p>Fecha: ${dateLabel(result.receipt.date)} · Estado: ${esc(result.receipt.status)}</p><p>La solicitud quedó registrada con los datos de contacto que proporcionaste.</p><button class="btn primary" id="another-request" type="button">Presentar otra solicitud</button></section>`;
+        lastPublicCode=result.receipt.trackingCode;
+        main.innerHTML=heading('Solicitud enviada','El Comité de Control de Cambios recibió tu solicitud.')+`<section class="card info-body receipt"><h2>${icon('check')} Solicitud ${esc(result.receipt.id)}</h2><label for="receipt-code">Código de seguimiento</label><input id="receipt-code" value="${esc(result.receipt.trackingCode)}" readonly aria-describedby="receipt-help"><p id="receipt-help">Guarda este código para consultar después el estado sin iniciar sesión. Selecciónalo y cópialo.</p><p>Fecha: ${dateLabel(result.receipt.date)} · Estado: ${esc(result.receipt.status)}</p><p>La solicitud quedó registrada con los datos de contacto que proporcionaste.</p><a class="btn primary" href="#consulta">Consultar estado</a><button class="btn" id="another-request" type="button">Presentar otra solicitud</button></section>`;
         document.querySelector('#another-request').onclick=()=>editForm(null,'usuario');
         window.scrollTo(0,0);main.focus({preventScroll:true});
       } catch(error){toast(error.message,true);}finally{saving=false;button.disabled=false;}
@@ -586,13 +603,14 @@ ${canEdit(r) ? `<a class="btn primary" href="#editar/${r.id}">${icon('edit')} Ed
 function route() {
   if(!currentUser){
     const publicView=location.hash.slice(1);
-    if(publicView==='login' || (publicView && !['panel','nueva','nueva/usuario'].includes(publicView)))loginScreen();
+    if(publicView==='consulta')publicStatusScreen();
+    else if(publicView==='login' || (publicView && !['panel','nueva','nueva/usuario'].includes(publicView)))loginScreen();
     else editForm(null,'usuario');
     window.scrollTo(0,0);main.focus({preventScroll:true});return;
   }
   const [view = 'panel', id] = location.hash.slice(1).split('/');
   const selected = store.requests.find(r => r.id === id);
-  const nav = view === 'nueva' ? 'nueva' : ['solicitudes', 'detalle', 'editar', 'analisis', 'decision'].includes(view) ? 'solicitudes' : 'panel';
+  const nav = view === 'nueva' ? 'nueva' : view === 'consulta' ? 'consulta' : ['solicitudes', 'detalle', 'editar', 'analisis', 'decision'].includes(view) ? 'solicitudes' : 'panel';
   document.querySelectorAll('[data-nav]').forEach(a => {
     const active = a.dataset.nav === nav;
     a.classList.toggle('active', active);
@@ -607,11 +625,13 @@ function route() {
     solicitudes: 'Solicitudes',
     nueva: 'Nueva solicitud',
     detalle: 'Detalle de solicitud',
-    editar: 'Editar solicitud', analisis: 'Análisis del CCC', decision: 'Decisión del CCC'
+    editar: 'Editar solicitud', analisis: 'Análisis del CCC', decision: 'Decisión del CCC', consulta: 'Consultar estado'
   })[view] || 'Panel principal';
   document.querySelector('#nav-count').textContent = store.requests.length;
   if (view === 'solicitudes')
     listing();
+  else if (view === 'consulta')
+    publicStatusScreen();
   else if (view === 'nueva')
     isCommittee() ? chooseRequest() : ['usuario','experto'].includes(id) ? editForm(null,id) : chooseRequest();
   else if (['detalle', 'editar', 'analisis', 'decision'].includes(view)) {

@@ -21,7 +21,7 @@ Fecha: 28 de octubre de 2026. Base revisada: `51f2606` (`main`, 27 de octubre de
 
 La **etapa** y el **resultado de la decisión** son datos distintos. Así se puede agrupar por etapa sin perder la decisión concreta. La fecha y el responsable de cada transición los asigna el servidor. La línea de tiempo muestra las transiciones en orden con un resumen breve. **Límite público acordado:** la consulta por código solo muestra etapa, fechas, resultado final y resúmenes generales como «Solicitud registrada» o «Análisis completado». No expone nombre, correo, título, descripción, justificación, análisis completo, votos ni documentos. El experto autenticado ve los datos de sus propias solicitudes.
 
-El código público de seguimiento será aleatorio y difícil de adivinar, distinto del ID secuencial `SCR-000n`. Se entrega una sola vez en el comprobante y se puede usar repetidamente para consultar. Su formato ilustrativo en los mockups es `CONS-7K4P-9M2Q`; el formato definitivo y la estrategia de recuperación de códigos perdidos se especificarán antes de implementar HU-01. El ID secuencial no da acceso público por sí solo.
+El código público de seguimiento es aleatorio y difícil de adivinar, distinto del ID secuencial `SCR-000n`. Se entrega en el comprobante y se puede usar repetidamente para consultar. El formato implementado es `CONS-XXXX-XXXX-XXXX-XXXX-XXXX`, con caracteres hexadecimales. Como transición para comprobantes emitidos antes de HU-01, el ID `SCR-000n` permite consultar solo el resumen público de solicitudes anónimas anteriores que todavía no tienen código `CONS`. Las solicitudes nuevas no se consultan por ID secuencial.
 
 ## Diferencias comprobadas con la versión actual
 
@@ -55,11 +55,11 @@ Rama prevista: `feature/HU-01-comprobante-publico`. Alcance: registro público, 
 
 **Como** usuario final sin cuenta, **quiero** introducir mi código de seguimiento, **para** conocer el estado sin iniciar sesión.
 
-Rama prevista: `feature/HU-02-consulta-publica`. Depende de HU-01 y HU-08.
+Rama prevista: `feature/HU-02-consulta-publica`. Depende de HU-01. La consulta refleja los estados que existan; HU-08 completará el nuevo flujo de decisión.
 
 1. **GIVEN** un código válido, **WHEN** se consulta, **THEN** se presenta la pantalla de estado con etapa, resultado si existe y fecha de la última transición de esa solicitud.
 2. **GIVEN** un código inexistente o mal formado, **WHEN** se consulta, **THEN** se muestra un mensaje claro sin revelar si existe un ID secuencial concreto ni datos de otras solicitudes.
-3. **GIVEN** únicamente el ID `SCR-000n` o un código ajeno, **WHEN** se intenta consultar por la API pública, **THEN** no se devuelve el expediente completo ni datos personales.
+3. **GIVEN** únicamente el ID `SCR-000n` de una solicitud nueva o experta, o un código ajeno, **WHEN** se intenta consultar por la API pública, **THEN** no se devuelve el expediente completo ni datos personales; un ID de comprobante público anterior sin código `CONS` solo permite el resumen público.
 4. **GIVEN** una decisión «Más información», **WHEN** el visitante consulta, **THEN** ve «Decisión ya tomada», el resultado y la indicación de contactar a un experto o al CCC; no aparece un formulario de respuesta.
 5. **GIVEN** consultas automatizadas repetidas, **WHEN** superan el límite de la consulta pública, **THEN** el servidor limita las solicitudes sin exponer expedientes.
 
@@ -136,7 +136,7 @@ Rama prevista: `feature/HU-08-decision-ccc`. Depende de HU-07.
 ## Secuencia de ramas y comprobación
 
 1. Crear `develop` desde el commit actual de `main`, sin mezclar los archivos de capturas y mockups que ya están sin seguimiento. Guardar este plan en el árbol de trabajo de `develop`; su incorporación al historial requiere un cambio documental revisado por el equipo.
-2. HU-05 se adelantó a petición del usuario para configurar las cuentas. Orden restante: **HU-01 → HU-03 → HU-07 → HU-08 → HU-06 → HU-02 → HU-04**. Para cada HU, crear su rama `feature/HU-xx-descripcion` **desde el `develop` actualizado**. Trabajar una historia a la vez; no crear todas las ramas por adelantado.
+2. HU-05 se adelantó a petición del usuario para configurar las cuentas. HU-01 y HU-02 se implementaron después para entregar el comprobante y su acceso público. Orden restante: **HU-03 → HU-07 → HU-08 → HU-06 → HU-04**. Para cada HU, crear su rama `feature/HU-xx-descripcion` **desde el `develop` actualizado**. Trabajar una historia a la vez; no crear todas las ramas por adelantado.
 3. En cada rama, actualizar los contratos y pruebas afectados junto con la implementación. Ejecutar `npm run check` y `npm test`, y recorrer en navegador los escenarios Given/When/Then de la historia. Usar una base temporal o de prueba; no depender de `.env` real.
 4. Revisar el diff y el resultado con una persona del equipo. Solo si los criterios pasan y hay revisión humana, integrar la rama en `develop`. Luego continuar con la siguiente. No declarar integrada una historia por pasar pruebas locales.
 5. Antes de una entrega, comprobar migración de datos existentes, aislamiento de solicitudes, arranque real y recorridos completos de visitante, experto y CCC.
@@ -154,3 +154,5 @@ No se modificó el comportamiento del producto al redactar este plan.
 ## Avance comprobado
 
 - **HU-05 integrada en `develop` (commit `2a0a63b`, 28 de octubre de 2026):** cinco expertos y cinco cuentas CCC; solo PabloMiembroCCC activa; el CCC no puede registrar solicitudes. El reinicio explícito de la base local dejó diez cuentas, cero sesiones y cero solicitudes. `npm run check` y `npm test` pasaron; las seis pruebas de backend y la prueba del cliente cubren cuentas, permisos y reinicio. Las demás historias siguen pendientes.
+- **HU-01 integrada en `develop` (commit `fe1f64c`, 28 de octubre de 2026):** el comprobante público entrega un código aleatorio `CONS` que persiste con la solicitud. `npm run check` y `npm test` pasaron.
+- **HU-02 integrada en `develop` (28 de octubre de 2026):** enlace «Consultar estado» visible sin cuenta, formulario por código, resultado público limitado y consulta de comprobantes anteriores. `npm run check`, `npm test` y recorrido real en navegador con `SCR-0001` pasaron.
