@@ -136,7 +136,7 @@ Rama prevista: `feature/HU-08-decision-ccc`. Depende de HU-07.
 ## Secuencia de ramas y comprobación
 
 1. Crear `develop` desde el commit actual de `main`, sin mezclar los archivos de capturas y mockups que ya están sin seguimiento. Guardar este plan en el árbol de trabajo de `develop`; su incorporación al historial requiere un cambio documental revisado por el equipo.
-2. Orden de implementación: **HU-01 → HU-03 → HU-05 → HU-07 → HU-08 → HU-06 → HU-02 → HU-04**. Para cada HU, crear su rama `feature/HU-xx-descripcion` **desde el `develop` actualizado**. Trabajar una historia a la vez; no crear todas las ramas por adelantado.
+2. HU-05 se adelantó a petición del usuario para configurar las cuentas. Orden restante: **HU-01 → HU-03 → HU-07 → HU-08 → HU-06 → HU-02 → HU-04**. Para cada HU, crear su rama `feature/HU-xx-descripcion` **desde el `develop` actualizado**. Trabajar una historia a la vez; no crear todas las ramas por adelantado.
 3. En cada rama, actualizar los contratos y pruebas afectados junto con la implementación. Ejecutar `npm run check` y `npm test`, y recorrer en navegador los escenarios Given/When/Then de la historia. Usar una base temporal o de prueba; no depender de `.env` real.
 4. Revisar el diff y el resultado con una persona del equipo. Solo si los criterios pasan y hay revisión humana, integrar la rama en `develop`. Luego continuar con la siguiente. No declarar integrada una historia por pasar pruebas locales.
 5. Antes de una entrega, comprobar migración de datos existentes, aislamiento de solicitudes, arranque real y recorridos completos de visitante, experto y CCC.
@@ -150,3 +150,7 @@ Rama prevista: `feature/HU-08-decision-ccc`. Depende de HU-07.
 - **Cuentas fijas:** usar `nombre@uta.edu.ec` para expertos y `nombremiembroccc@uta.edu.ec` para CCC, con nombres visibles `NombreMiembroCCC`. La clave inicial se configura localmente al poblar la base y se almacena como hash; no habrá recuperación de cuenta.
 
 No se modificó el comportamiento del producto al redactar este plan.
+
+## Avance comprobado
+
+- **HU-05 integrada en `develop` (commit `2a0a63b`, 28 de octubre de 2026):** cinco expertos y cinco cuentas CCC; solo PabloMiembroCCC activa; el CCC no puede registrar solicitudes. El reinicio explícito de la base local dejó diez cuentas, cero sesiones y cero solicitudes. `npm run check` y `npm test` pasaron; las seis pruebas de backend y la prueba del cliente cubren cuentas, permisos y reinicio. Las demás historias siguen pendientes.
