@@ -8,7 +8,7 @@ function node(id){
   return nodes.get(id);
 }
 const user={id:'expert-leslie',name:'Leslie',email:'leslie@uta.edu.ec',role:'experto'};
-const committee=[{id:'ccc-pablo',name:'PabloMiembroCCC',role:'ccc'}];
+const committee=[{id:'ccc-david',name:'DavidMiembroCCC',role:'ccc'}];
 let active=user,requests=[],calls=[];
 const fetch=async(url,options={})=>{
   const body=options.body?JSON.parse(options.body):{};calls.push({url,...options,data:body});
@@ -41,7 +41,7 @@ const submit=async(id,data)=>{FormDataMock.data=data;await node(id).onsubmit({pr
   active=committee[0];context.committeeUser=active;run('currentUser=committeeUser');await run('loadStore()');
   run('renderSession()');assert.equal(node('[data-nav="nueva"]').hidden,true);
   run("location.hash='#nueva';route()");assert.match(node('main').innerHTML,/El CCC solo revisa solicitudes/);assert.doesNotMatch(node('main').innerHTML,/id="request-form"/);
-  requests[0].analysis={analyst:'PabloMiembroCCC',impact:'Medio',feasibility:'Viable',effort:'24 horas',considerations:'Revisar pruebas'};
+  requests[0].analysis={analyst:'DavidMiembroCCC',impact:'Medio',feasibility:'Viable',effort:'24 horas',considerations:'Revisar pruebas'};
   run('resolutionForm(store.requests[0])');assert.match(node('main').innerHTML,/id="resolution-form"/);
   assert.doesNotMatch(node('main').innerHTML,/Votos registrados|Guardar mi voto|Primer integrante|Segundo integrante|id="vote-form"/);
   assert.match(node('main').innerHTML,/Resumen de la solicitud/);assert.match(node('main').innerHTML,/Resumen del análisis/);

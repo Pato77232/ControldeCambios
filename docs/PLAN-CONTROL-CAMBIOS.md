@@ -7,7 +7,7 @@ Fecha: 28 de octubre de 2026. Base revisada: `51f2606` (`main`, 27 de octubre de
 - El usuario final registra una solicitud sin cuenta. El comprobante entrega un código de seguimiento que puede copiar y usar para consultar el estado.
 - El experto inicia sesión, registra solicitudes técnicas, vuelve a su listado al guardar y abre cualquiera de sus solicitudes para consultar su estado.
 - La pantalla de estado comparte estructura y línea de tiempo para ambas personas. La vista pública se limita a información de seguimiento; la vista del experto puede mostrar los datos de su solicitud autenticada.
-- Se preparan cinco cuentas de experto y cinco cuentas CCC para Leslie, David, Edwin, Pablo y Shirley. **PabloMiembroCCC** es la única cuenta CCC activa; las otras cuatro no pueden iniciar sesión. El CCC solo revisa solicitudes ajenas: no registra solicitudes propias.
+- Se preparan cinco cuentas de experto y cinco cuentas CCC para Leslie, David, Edwin, Pablo y Shirley. Por acuerdo posterior, **DavidMiembroCCC** es la única cuenta CCC activa; las otras cuatro no pueden iniciar sesión. El CCC solo revisa solicitudes ajenas: no registra solicitudes propias.
 - El CCC ve tres grupos: **No analizadas**, **Analizadas** y **Decisión ya tomada**. Una solicitud avanza en ese orden. El análisis y la decisión tienen formularios distintos.
 - **Más información** es una decisión ya tomada. La consulta informa que la persona debe contactar fuera del sistema a un experto o al CCC; no existe respuesta pública dentro de la aplicación.
 
@@ -143,7 +143,7 @@ Rama prevista: `feature/HU-08-decision-ccc`. Depende de HU-07.
 
 ## Decisiones y riesgos antes de codificar
 
-- **Cuenta CCC activa:** el usuario eligió PabloMiembroCCC. Las otras cuatro cuentas CCC permanecen inactivas.
+- **Cuenta CCC activa:** el usuario eligió primero PabloMiembroCCC y después cambió la decisión a DavidMiembroCCC. Las otras cuatro cuentas CCC permanecen inactivas.
 - **Reinicio de datos:** la petición actual autoriza eliminar todos los usuarios, sesiones y solicitudes anteriores. Ejecutarlo una sola vez y verificar la base resultante antes de continuar con historias de flujo.
 - **Código extraviado:** el prototipo no envía correos ni verifica identidad. Definir un procedimiento humano de recuperación o declarar que no habrá recuperación en esta fase.
 - **Contenido público:** está acordado mostrar únicamente etapa, resultado, fechas y resúmenes neutros. El título, la descripción, la justificación y el análisis completo quedan fuera de la consulta por código.
@@ -157,3 +157,4 @@ No se modificó el comportamiento del producto al redactar este plan.
 - **HU-01 integrada en `develop` (commit `fe1f64c`, 28 de octubre de 2026):** el comprobante público entrega un código aleatorio `CONS` que persiste con la solicitud. `npm run check` y `npm test` pasaron.
 - **HU-02 integrada en `develop` (28 de octubre de 2026):** enlace «Consultar estado» visible sin cuenta, formulario por código, resultado público limitado y consulta de comprobantes anteriores. `npm run check`, `npm test` y recorrido real en navegador con `SCR-0001` pasaron.
 - **HU-08 integrada en `develop` (28 de octubre de 2026):** el único CCC activo decide directamente después del análisis. Se retiraron voto, selección de participantes y respuesta dentro del sistema para «Más información». Pasaron `npm run check`, `npm test` y el recorrido real en navegador con una base temporal, desde una solicitud analizada hasta su decisión final.
+- **Cambio posterior de CCC activo (28 de octubre de 2026):** DavidMiembroCCC sustituye a PabloMiembroCCC como única cuenta CCC activa. La operación de preparación de demo elimina todas las solicitudes de prueba y sesiones de la base local sin cambiar las diez cuentas ni sus contraseñas.

@@ -8,6 +8,7 @@ const {DatabaseSync}=require('node:sqlite');
 const {createApp}=require('../backend/server.cjs');
 const {openDatabase}=require('../backend/database.cjs');
 const {resetData}=require('../backend/auth.cjs');
+const {prepareDemo}=require('../backend/prepare-demo.cjs');
 const PASSWORD='Test-ChangeFlow-2026!';
 const names=['leslie','david','edwin','pablo','shirley'];
 const common={requesterType:'usuario',project:'ProyectoBusesUTA',module:'Autenticación y usuarios',title:'Mensajes de inicio de sesión',currentBehavior:'El mensaje resulta confuso.',description:'Mejorar los mensajes del proceso de inicio de sesión.',justification:'Los usuarios necesitan comprender cómo corregir sus datos.',result:'Mensajes comprensibles.',attachments:[]};
@@ -33,23 +34,23 @@ async function client(app,email) {
   if(email){const result=await call('/api/auth/login','POST',{email,password:PASSWORD});assert.equal(result.status,200);assert.match(result.headers.get('set-cookie'),/HttpOnly/);}
   return {call};
 }
-test('cinco expertos, cinco CCC, solo Pablo activo y permisos por rol',async()=>{
+test('cinco expertos, cinco CCC, solo David activo y permisos por rol',async()=>{
   const app=await start();
   try {
     const users=app.db.prepare('SELECT id,name,email,role,active,password_hash FROM users ORDER BY id').all();
     assert.equal(users.length,10);
     for(const name of names){
       assert.ok(users.some(u=>u.id===`expert-${name}`&&u.email===`${name}@uta.edu.ec`&&u.role==='experto'&&u.active===1));
-      assert.ok(users.some(u=>u.id===`ccc-${name}`&&u.email===`${name}miembroccc@uta.edu.ec`&&u.role==='ccc'&&u.active===Number(name==='pablo')));
+      assert.ok(users.some(u=>u.id===`ccc-${name}`&&u.email===`${name}miembroccc@uta.edu.ec`&&u.role==='ccc'&&u.active===Number(name==='david')));
     }
     assert.equal(users.filter(u=>u.role==='usuario').length,0);
     assert.ok(users.every(u=>u.password_hash!==PASSWORD));
     assert.equal(new Set(users.map(u=>u.password_hash)).size,10);
     const guest=await client(app);
-    for(const name of names.filter(n=>n!=='pablo'))assert.equal((await guest.call('/api/auth/login','POST',{email:`${name}miembroccc@uta.edu.ec`,password:PASSWORD})).status,401);
+    for(const name of names.filter(n=>n!=='david'))assert.equal((await guest.call('/api/auth/login','POST',{email:`${name}miembroccc@uta.edu.ec`,password:PASSWORD})).status,401);
     assert.equal((await guest.call('/api/auth/login','POST',{email:'ana@changeflow.local',password:PASSWORD})).status,401);
-    const ccc=await client(app,'pablomiembroccc@uta.edu.ec');
-    assert.deepEqual((await ccc.call('/api/committee')).data.users.map(u=>u.id),['ccc-pablo']);
+    const ccc=await client(app,'davidmiembroccc@uta.edu.ec');
+    assert.deepEqual((await ccc.call('/api/committee')).data.users.map(u=>u.id),['ccc-david']);
     assert.equal((await ccc.call('/api/requests','POST',{...common,requesterType:'experto'})).status,403);
     const expert=await client(app,'leslie@uta.edu.ec');
     assert.equal((await expert.call('/api/committee')).data.users.length,0);
@@ -65,7 +66,7 @@ test('cinco expertos, cinco CCC, solo Pablo activo y permisos por rol',async()=>
     assert.equal((await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{decision:'Aprobado',decisionNote:'Sin análisis',revision:request.revision})).status,409);
     let result=await ccc.call(`/api/requests/${request.id}/analysis`,'POST',{...analysis,revision:request.revision});
     assert.equal(result.status,200);request=result.data.request;
-    assert.equal(request.analysis.analyst,'PabloMiembroCCC');
+    assert.equal(request.analysis.analyst,'DavidMiembroCCC');
     assert.equal((await ccc.call(`/api/requests/${request.id}/vote`,'POST',{decision:'Aprobado',revision:request.revision})).status,404);
     assert.equal((await ccc.call(`/api/requests/${request.id}/analysis`,'POST',{...analysis,revision:request.revision})).status,409);
     assert.equal((await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{decision:'Aprobado con condiciones',decisionNote:'Cambio viable',revision:request.revision})).status,400);
@@ -73,18 +74,18 @@ test('cinco expertos, cinco CCC, solo Pablo activo y permisos por rol',async()=>
     result=await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{decision:'Aprobado',decisionNote:'Cambio viable',revision:request.revision});
     assert.equal(result.status,200);request=result.data.request;
     assert.equal(request.status,'Aprobada');
-    assert.equal(request.decision.responsibleId,'ccc-pablo');
+    assert.equal(request.decision.responsibleId,'ccc-david');
     assert.equal(request.decision.votes,undefined);
     assert.equal(request.decision.date!==undefined,true);
     assert.equal((await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{decision:'Rechazado',decisionNote:'Otro resultado',revision:request.revision})).status,409);
-    app.db.prepare("UPDATE users SET active=0 WHERE id='ccc-pablo'").run();
+    app.db.prepare("UPDATE users SET active=0 WHERE id='ccc-david'").run();
     assert.equal((await ccc.call('/api/auth/me')).status,401);
   } finally {await stop(app);}
 });
 test('la solicitud pública no crea cuenta y solo el CCC activo la ve',async()=>{
   const app=await start();
   try {
-    const guest=await client(app),ccc=await client(app,'pablomiembroccc@uta.edu.ec');
+    const guest=await client(app),ccc=await client(app,'davidmiembroccc@uta.edu.ec');
     const payload={...common,name:'Visitante',email:'visitante@example.com',trackingCode:'CONS-INVENTADO',status:'Aprobada'};
     assert.equal((await guest.call('/backend/data/changeflow.sqlite')).status,404);
     assert.equal((await guest.call('/.env')).status,404);
@@ -122,7 +123,7 @@ test('el código público persiste al reiniciar y no duplica la solicitud',async
 test('consulta pública por código muestra solo estado y resúmenes neutros',async()=>{
   const app=await start();
   try {
-    const guest=await client(app),ccc=await client(app,'pablomiembroccc@uta.edu.ec'),expert=await client(app,'leslie@uta.edu.ec');
+    const guest=await client(app),ccc=await client(app,'davidmiembroccc@uta.edu.ec'),expert=await client(app,'leslie@uta.edu.ec');
     const payload={...common,name:'Nombre privado',email:'privado@example.com',title:'Título privado',description:'Descripción privada de la solicitud.'};
     const receipt=(await guest.call('/api/public/requests','POST',payload)).data.receipt;
     const endpoint=code=>`/api/public/status?code=${encodeURIComponent(code)}`;
@@ -177,11 +178,11 @@ test('la consulta pública limita intentos repetidos',async()=>{
 test('validación, identidad, edición y códigos de solicitud siguen protegidos',async()=>{
   const app=await start();
   try {
-    const expert=await client(app,'shirley@uta.edu.ec'),ccc=await client(app,'pablomiembroccc@uta.edu.ec');
+    const expert=await client(app,'shirley@uta.edu.ec'),ccc=await client(app,'davidmiembroccc@uta.edu.ec');
     assert.equal((await expert.call('/api/requests','POST',{...expertRequest,description:'corto'})).status,400);
     assert.equal((await expert.call('/api/requests','POST',{...expertRequest,proposedPriority:'No válida'})).status,400);
     assert.equal((await expert.call('/api/requests','POST',expertRequest,{Origin:'https://otro.example'})).status,403);
-    const created=await expert.call('/api/requests','POST',{...expertRequest,name:'Suplantado',ownerId:'ccc-pablo',status:'Aprobada'});
+    const created=await expert.call('/api/requests','POST',{...expertRequest,name:'Suplantado',ownerId:'ccc-david',status:'Aprobada'});
     assert.equal(created.status,201);
     let request=created.data.request;
     assert.equal(request.name,'Shirley');assert.equal(request.ownerId,'expert-shirley');assert.equal(request.status,'Pendiente');
@@ -223,6 +224,27 @@ test('el reinicio borra solicitudes y sesiones, conserva las diez cuentas nuevas
     assert.equal((await fresh.call('/api/requests')).data.requests.length,0);
     assert.equal((await fresh.call('/api/requests','POST',expertRequest)).data.request.id,'SCR-0001');
   } finally {if(app)await stop(app);rmSync(folder,{recursive:true,force:true});}
+});
+test('la preparación de demo borra solicitudes, cierra sesiones y activa solo a David sin cambiar claves',async()=>{
+  const app=await start();
+  try {
+    const expert=await client(app,'leslie@uta.edu.ec');
+    const ccc=await client(app,'davidmiembroccc@uta.edu.ec');
+    const hashes=app.db.prepare('SELECT id,password_hash FROM users ORDER BY id').all();
+    assert.equal((await expert.call('/api/requests','POST',expertRequest)).status,201);
+    assert.equal((await expert.call('/api/requests','POST',expertRequest)).status,201);
+    app.db.prepare("UPDATE users SET active=1 WHERE id='ccc-pablo'").run();
+    const result=prepareDemo(app.db);
+    assert.deepEqual(result,{removed:2,activeCommittee:'DavidMiembroCCC'});
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM requests').get().n,0);
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM sessions').get().n,0);
+    assert.deepEqual(app.db.prepare('SELECT id FROM users WHERE role=\'ccc\' AND active=1').all().map(u=>u.id),['ccc-david']);
+    assert.deepEqual(app.db.prepare('SELECT id,password_hash FROM users ORDER BY id').all(),hashes);
+    assert.equal((await expert.call('/api/auth/me')).status,401);
+    assert.equal((await ccc.call('/api/auth/me')).status,401);
+    const fresh=await client(app,'leslie@uta.edu.ec');
+    assert.equal((await fresh.call('/api/requests','POST',expertRequest)).data.request.id,'SCR-0001');
+  } finally {await stop(app);}
 });
 test('la base anterior migra y el reinicio elimina sus usuarios y expedientes',()=>{
   const folder=mkdtempSync(join(tmpdir(),'changeflow-migration-')),filename=join(folder,'old.sqlite');let db;

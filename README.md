@@ -25,10 +25,12 @@ Al crear una base vacía se generan diez cuentas, todas con la contraseña inici
 | Cuenta | Perfil | Acceso |
 |---|---|---|
 | `leslie@uta.edu.ec`, `david@uta.edu.ec`, `edwin@uta.edu.ec`, `pablo@uta.edu.ec`, `shirley@uta.edu.ec` | Expertos | Cada uno crea y consulta sus propias solicitudes. |
-| `pablomiembroccc@uta.edu.ec` | CCC activo | Consulta y revisa todas las solicitudes; no puede crear una propia. |
-| `lesliemiembroccc@uta.edu.ec`, `davidmiembroccc@uta.edu.ec`, `edwinmiembroccc@uta.edu.ec`, `shirleymiembroccc@uta.edu.ec` | CCC inactivos | Existen en la base, pero no pueden iniciar sesión. |
+| `davidmiembroccc@uta.edu.ec` | CCC activo | Consulta y revisa todas las solicitudes; no puede crear una propia. |
+| `lesliemiembroccc@uta.edu.ec`, `edwinmiembroccc@uta.edu.ec`, `pablomiembroccc@uta.edu.ec`, `shirleymiembroccc@uta.edu.ec` | CCC inactivos | Existen en la base, pero no pueden iniciar sesión. |
 
 La contraseña inicial de las cuentas se configura en `SEED_PASSWORD` dentro de tu `.env` local. `.env` y la base están excluidos de Git y no son accesibles desde el servidor de archivos.
+
+Para preparar una demostración con una base existente, detén el servidor y ejecuta `npm run prepare:demo -- --confirm`. Esta operación borra todas las solicitudes, reinicia su contador, cierra las sesiones y deja activa solo la cuenta CCC de David; conserva las diez cuentas y sus contraseñas. Es una operación explícita que no ocurre en cada arranque.
 
 Las cuentas se crean solo una vez. Cambiar `SEED_PASSWORD` no cambia las contraseñas de una base existente. No hay registro público, recuperación de contraseñas ni administración de cuentas en la interfaz. Para borrar **todos** los usuarios, sesiones y solicitudes anteriores y volver a cargar estas diez cuentas, ejecuta `SEED_PASSWORD=<clave-de-al-menos-12-caracteres> npm run reset:data` con el servidor detenido. El reinicio de datos no ocurre al arrancar normalmente.
 
@@ -51,7 +53,7 @@ El CCC registra impacto, impacto técnico, riesgos, viabilidad, esfuerzo, recurs
 
 ### Decisión final
 
-PabloMiembroCCC registra directamente la decisión final después del análisis, sin votos ni selección de participantes. El servidor identifica al responsable por la sesión y excluye al solicitante por su ID de cuenta.
+DavidMiembroCCC registra directamente la decisión final después del análisis, sin votos ni selección de participantes. El servidor identifica al responsable por la sesión y excluye al solicitante por su ID de cuenta.
 
 - **Aprobado:** finaliza la revisión; no significa que el cambio esté implementado.
 - **Aprobado con condiciones:** exige un texto con las restricciones o requisitos y finaliza la revisión.
@@ -123,7 +125,7 @@ Los adjuntos continúan guardando únicamente nombres; no hay subida ni descarga
 
 La prueba del cliente verifica el formulario experto, el formulario público, la ausencia de «Nueva solicitud» para el CCC y el envío de la decisión directa a la API.
 
-Para demostrarlo manualmente: entra como Leslie y crea una solicitud; luego entra como PabloMiembroCCC para analizarla y resolverla. Las pestañas del mismo perfil de navegador comparten la cookie de sesión.
+Para demostrarlo manualmente: entra como Leslie y crea una solicitud; luego entra como DavidMiembroCCC para analizarla y resolverla. Las pestañas del mismo perfil de navegador comparten la cookie de sesión.
 
 ## Diseño BusesUTA
 

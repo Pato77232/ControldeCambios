@@ -11,6 +11,6 @@ if(!password||password.length<12){
   const db=openDatabase(filename);
   try {
     resetData(db,password);
-    console.log('Base reiniciada: 5 expertos, 5 cuentas CCC; solo PabloMiembroCCC activa.');
+    console.log('Base reiniciada: 5 expertos, 5 cuentas CCC; solo DavidMiembroCCC activa.');
   } finally {db.close();}
 }

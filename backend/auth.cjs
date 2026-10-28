@@ -16,7 +16,7 @@ function initialUsers() {
     const key=name.toLowerCase();
     return [
       {id:`expert-${key}`,name,email:`${key}@uta.edu.ec`,role:'experto',active:1},
-      {id:`ccc-${key}`,name:`${name}MiembroCCC`,email:`${key}miembroccc@uta.edu.ec`,role:'ccc',active:Number(key==='pablo')}
+      {id:`ccc-${key}`,name:`${name}MiembroCCC`,email:`${key}miembroccc@uta.edu.ec`,role:'ccc',active:Number(key==='david')}
     ];
   });
 }
