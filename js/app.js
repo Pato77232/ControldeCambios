@@ -3,8 +3,8 @@
 const STATES = ['Pendiente', 'Aprobada', 'Rechazada', 'Aprobada con condiciones', 'Más información'];
 const RESOLUTIONS = ['Aprobado', 'Aprobado con condiciones', 'Rechazado', 'Más información'];
 const RESOLUTION_STATES = { 'Aprobado': 'Aprobada', 'Aprobado con condiciones': 'Aprobada con condiciones', 'Rechazado': 'Rechazada', 'Más información': 'Más información' };
-let CCC_USERS = [], currentUser = null, csrfToken = '', saving = false, lastPublicCode = '';
-function canReview(r) { return ['Pendiente', 'Más información'].includes(r.status); }
+let currentUser = null, csrfToken = '', saving = false, lastPublicCode = '';
+function canReview(r) { return r.status === 'Pendiente'; }
 
 const PRIORITIES = ['Baja', 'Media', 'Alta', 'Crítica'];
 const TYPES = ['Corrección de error', 'Nueva funcionalidad', 'Mejora', 'Seguridad', 'Otro'];
@@ -93,8 +93,7 @@ async function api(path, {method='GET', body} = {}) {
   return result;
 }
 async function loadStore() {
-  const [data,committee] = await Promise.all([api('/requests'),api('/committee')]);
-  store=data;CCC_USERS=committee.users;
+  store=await api('/requests');
   document.querySelector('#nav-count').textContent=store.requests.length;
 }
 async function saveAction(path,body,method='POST') {
@@ -112,7 +111,7 @@ function renderSession() {
   document.querySelector('[data-nav="nueva"]').hidden=isCommittee();
   if(!currentUser)return;
   document.querySelector('#refresh-data').onclick=async()=>{try{await loadStore();route();toast('Datos actualizados.');}catch(e){toast(e.message,true);}};
-  document.querySelector('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST',body:{}});currentUser=null;csrfToken='';CCC_USERS=[];store={nextId:1,requests:[]};renderSession();location.hash='nueva/usuario';route();}catch(e){toast(e.message,true);}};
+  document.querySelector('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST',body:{}});currentUser=null;csrfToken='';store={nextId:1,requests:[]};renderSession();location.hash='nueva/usuario';route();}catch(e){toast(e.message,true);}};
 }
 function loginScreen(message='') {
   main.innerHTML=heading('Iniciar sesión','Accede con tu cuenta para registrar o revisar solicitudes de cambio.')+`<form id="login-form" class="card login-card"><div class="detail-body"><h2>Acceso a BusesUTA</h2><label for="login-email">Correo electrónico</label><input id="login-email" name="email" type="email" autocomplete="username" required maxlength="200"><label for="login-password">Contraseña</label><input id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="512"><p class="error" id="login-error" role="alert">${esc(message)}</p><button class="btn primary" type="submit">Entrar</button><p><a class="text-link" href="#nueva/usuario">Presentar una solicitud sin cuenta</a></p><p><a class="text-link" href="#consulta">Consultar estado con un código</a></p></div></form>`;
@@ -285,7 +284,7 @@ function dashboard() {
 </section>
 <section class="card notice">
 <h2>${icon('info')} Tu espacio de demostración</h2>
-<p>Documenta cambios de ProyectoBusesUTA. Las solicitudes, análisis, votos y resoluciones se conservan en el servidor.</p>
+<p>Documenta cambios de ProyectoBusesUTA. Las solicitudes, análisis y decisiones se conservan en el servidor.</p>
 <small>Acceso según el perfil de la cuenta</small>
 </section>
 </div>`;
@@ -369,7 +368,7 @@ const fieldLabels = {
   acceptanceCriteria: 'Criterios de aceptación',
   technicalImpact: 'Impacto técnico previsto'
 };
-const requiredFields = ['member1','vote1','name','email','project','module','title','currentBehavior','description','justification','result','components','environment','acceptanceCriteria','analyst','impact','technicalImpact','risks','feasibility','effort','resources','considerations','priority','responsible','decision','decisionNote'];
+const requiredFields = ['name','email','project','module','title','currentBehavior','description','justification','result','components','environment','acceptanceCriteria','analyst','impact','technicalImpact','risks','feasibility','effort','resources','considerations','priority','responsible','decision','decisionNote'];
 Object.assign(fieldLabels,{analyst:'Miembro del CCC',feasibility:'Viabilidad',effort:'Esfuerzo y tiempo estimados',resources:'Recursos necesarios',considerations:'Consideraciones y recomendación',responsible:'Responsable de la decisión',decision:'Decisión',decisionNote:'Motivos de la decisión',requesterType:'Tipo de solicitante',analysisDate:'Fecha del análisis'});
 function field(key, value = '', config = {}) {
   const required = requiredFields.includes(key);
@@ -462,56 +461,42 @@ function editForm(request, kind = 'usuario') {
 }
 function committeeForm(r, decision = false) {
   if(decision){resolutionForm(r);return;}
-  if(!canEvaluate(r)||!canReview(r)){main.innerHTML=heading('Etapa no disponible','Solo un miembro independiente del CCC puede analizar una solicitud pendiente.')+`<a class="btn" href="#detalle/${r.id}">Volver</a>`;return;}
+  if(!canEvaluate(r)||!canReview(r)||r.analysis){main.innerHTML=heading('Etapa no disponible','Solo el CCC puede analizar una solicitud que aún no tiene análisis.')+`<a class="btn" href="#detalle/${r.id}">Volver</a>`;return;}
   const keys=['impact','technicalImpact','risks','feasibility','effort','resources','considerations','priority'];
   const values={...(r.analysis || {}),analyst:currentUser.name};
   const selects={impact:['Bajo','Medio','Alto'],feasibility:['Viable','Viable con condiciones','No viable'],priority:PRIORITIES};
-  main.innerHTML=heading('Análisis del CCC',`${r.id} · ${esc(r.title)}`,`<a class="btn" href="#detalle/${r.id}">Consultar petición</a>`)+`<form id="committee-form" class="form-layout" novalidate>${section('2','Impacto y consideraciones','Todos los campos son obligatorios. Guardar el análisis invalida los votos anteriores.',field('analyst',values.analyst,{readonly:true})+field('analysisDate',values.date ? dateLabel(values.date) : 'Automática al guardar',{readonly:true})+keys.map(k=>['feasibility','priority','impact'].includes(k) ? radioCards(k,selects[k],values[k],k==='feasibility'?['El cambio puede implementarse sin limitaciones significativas.','Requiere condiciones o ajustes adicionales.','No es viable con la infraestructura actual.']:[]) : field(k,values[k],{options:selects[k],placeholder:selects[k]?'Selecciona una opción':'',area:['technicalImpact','risks','resources','considerations'].includes(k),full:['resources','considerations'].includes(k)})).join(''))}<div class="form-actions"><a class="btn" href="#detalle/${r.id}">Cancelar</a><button class="btn primary">Guardar análisis</button></div></form>`;
+  main.innerHTML=heading('Análisis del CCC',`${r.id} · ${esc(r.title)}`,`<a class="btn" href="#detalle/${r.id}">Consultar petición</a>`)+`<form id="committee-form" class="form-layout" novalidate>${section('2','Impacto y consideraciones','Todos los campos son obligatorios. Después de guardar, la solicitud pasa a la etapa de decisión.',field('analyst',values.analyst,{readonly:true})+field('analysisDate',values.date ? dateLabel(values.date) : 'Automática al guardar',{readonly:true})+keys.map(k=>['feasibility','priority','impact'].includes(k) ? radioCards(k,selects[k],values[k],k==='feasibility'?['El cambio puede implementarse sin limitaciones significativas.','Requiere condiciones o ajustes adicionales.','No es viable con la infraestructura actual.']:[]) : field(k,values[k],{options:selects[k],placeholder:selects[k]?'Selecciona una opción':'',area:['technicalImpact','risks','resources','considerations'].includes(k),full:['resources','considerations'].includes(k)})).join(''))}<div class="form-actions"><a class="btn" href="#detalle/${r.id}">Cancelar</a><button class="btn primary">Guardar análisis</button></div></form>`;
   main.innerHTML = formShell('analisis','Análisis de impacto del cambio – CCC','Un miembro o analista asignado por el Comité de Control de Cambios evalúa la solicitud antes de la decisión final.',main.innerHTML.slice(main.innerHTML.indexOf('<form')),r);
   document.querySelector('#committee-form').onsubmit=async event=>{
     event.preventDefault();const form=event.currentTarget,data=Object.fromEntries(new FormData(form)),errors={};
     keys.forEach(k=>{data[k]=String(data[k]||'').trim();if(!data[k])errors[k]='Este campo es obligatorio.';else if(selects[k]&&!selects[k].includes(data[k]))errors[k]='Selecciona una opción válida.';});
     if(!showErrors(form,errors))return;
     const result=await saveAction(`/requests/${r.id}/analysis`,{...data,revision:r.revision});
-    if(result){location.hash=`detalle/${r.id}`;route();toast('Análisis guardado. Cada miembro puede registrar su voto.');}
+    if(result){location.hash=`detalle/${r.id}`;route();toast('Análisis guardado. Ya puedes registrar la decisión final.');}
   };
 }
 function resolutionDetails(d) {
-  return `<h3>Resolución del CCC · ${esc(d.decision)}</h3><p>${esc(d.responsible)} · ${dateLabel(d.date,true)}</p><p>${esc(d.decisionNote)}</p>${d.conditions ? `<h4>Condiciones de aprobación</h4><p>${esc(d.conditions)}</p>` : ''}${d.votes ? `<h4>Participantes y votos</h4><ul>${d.votes.map(v=>`<li>${esc(v.name)}: ${esc(v.decision)}</li>`).join('')}</ul>` : ''}`;
+  return `<h3>Resolución del CCC · ${esc(d.decision)}</h3><p>${esc(d.responsible)} · ${dateLabel(d.date,true)}</p><p>${esc(d.decisionNote)}</p>${d.conditions ? `<h4>Condiciones de aprobación</h4><p>${esc(d.conditions)}</p>` : ''}`;
 }
 function resolutionForm(r) {
   if(!canEvaluate(r)||!canReview(r)||!r.analysis){main.innerHTML=heading('Etapa no disponible','Se requiere un análisis previo y un miembro independiente del CCC.')+`<a class="btn" href="#detalle/${r.id}">Volver</a>`;return;}
-  Object.assign(fieldLabels,{conditions:'Condiciones de aprobación',resolutionId:'ID del cambio',requestSummary:'Resumen de solicitud',analysisSummary:'Resultado del análisis',registeredBy:'Responsable de la resolución',decisionDate:'Fecha de decisión',ownVote:'Mi voto',decision:'Decisión final',decisionNote:'Motivo de la decisión'});
-  const members=CCC_USERS.filter(u=>u.id!==r.ownerId),votes=r.committeeVotes || [];
-  const optionsMembers=`<option value="">Selecciona un integrante</option>${members.map(u=>`<option value="${u.id}" ${u.id===currentUser.id?'selected':''}>${esc(u.name)}</option>`).join('')}`;
-  const own= votes.find(v=>v.id===currentUser.id);
-  main.innerHTML=heading('Resolución del CCC','Cada integrante registra su propio voto con su sesión.',`<a class="btn" href="#detalle/${r.id}">Consultar expediente</a>`)+
-    `<section class="card info-body"><h2>Votos registrados</h2><p>${votes.length?votes.map(v=>`${esc(v.name)}: ${esc(v.decision)}`).join('<br>'):'Todavía no hay votos.'}</p><form id="vote-form"><label for="own-vote">Mi voto · ${esc(currentUser.name)}</label><select id="own-vote" required>${options(RESOLUTIONS,own?.decision,'Selecciona tu voto')}</select><button class="btn" type="submit">Guardar mi voto</button></form><p class="hint">Usa Actualizar para consultar el voto de otro integrante. Un cambio en el análisis requiere renovar todos los votos.</p></section>`+
-    `<form id="resolution-form" class="form-layout" novalidate>${section('4','Resolución del Comité','El responsable y la fecha se obtienen del servidor.',
-      `<div class="field"><label for="member1">Primer integrante *</label><select id="member1" name="member1" required>${optionsMembers}</select><span class="error" id="member1-error"></span></div><div class="field"><label for="member2">Segundo integrante (opcional)</label><select id="member2" name="member2">${optionsMembers.replaceAll(' selected','')}</select><span class="error" id="member2-error"></span></div><p class="hint full">Con dos integrantes se requiere unanimidad. Ante desacuerdo, solicita más información. El responsable debe participar y nadie puede resolver su propia solicitud.</p>`+
-      `<fieldset class="field full resolution-options"><legend>Decisión final *</legend>${RESOLUTIONS.map((d,i)=>`<label><input type="radio" name="decision" id="${i===0?'decision':'decision-'+i}" value="${esc(d)}" required><span><span class="decision-symbol symbol-${i}">${icon(['check','clock','close','info'][i])}</span><strong>${d==='Más información'?'Solicitar más información':d}</strong><small>${['Se aprueba la implementación del cambio.','Se aprueba sujeto a condiciones específicas.','Se rechaza la solicitud de cambio.','Se requiere información adicional antes de decidir.'][i]}</small></span></label>`).join('')}<span class="error" id="decision-error"></span></fieldset>`+
+  Object.assign(fieldLabels,{conditions:'Condiciones de aprobación',resolutionId:'ID del cambio',requestSummary:'Resumen de solicitud',analysisSummary:'Resultado del análisis',registeredBy:'Responsable de la resolución',decisionDate:'Fecha de decisión',decision:'Decisión final',decisionNote:'Motivo de la decisión'});
+  main.innerHTML=heading('Decisión final del CCC','Revisa la solicitud y el análisis antes de guardar la decisión.',`<a class="btn" href="#detalle/${r.id}">Consultar expediente</a>`)+
+    `<form id="resolution-form" class="form-layout" novalidate>${section('4','Decisión final','El responsable y la fecha se obtienen del servidor.',
+      `<fieldset class="field full resolution-options"><legend>Decisión final *</legend>${RESOLUTIONS.map((d,i)=>`<label><input type="radio" name="decision" id="${i===0?'decision':'decision-'+i}" value="${esc(d)}" required><span><span class="decision-symbol symbol-${i}">${icon(['check','clock','close','info'][i])}</span><strong>${d}</strong><small>${['Se aprueba la implementación del cambio.','Se aprueba sujeto a condiciones específicas.','Se rechaza la solicitud de cambio.','La persona deberá contactar fuera del sistema a un experto o al CCC.'][i]}</small></span></label>`).join('')}<span class="error" id="decision-error"></span></fieldset>`+
       field('decisionNote','',{area:true,full:true})+`<div id="conditions-wrap" class="full" hidden>${field('conditions','',{area:true,full:true,hint:'Obligatorio al aprobar con condiciones.'})}</div>`+
-      field('registeredBy',currentUser.name,{readonly:true})+field('decisionDate','Automática al guardar',{readonly:true}))}<div class="form-actions"><a class="btn" href="#detalle/${r.id}">Cancelar</a><button class="btn primary">Guardar resolución</button></div></form>`;
-  main.innerHTML = formShell('decision','Resolución del Comité de Control de Cambios','El Comité de Control de Cambios (CCC) emite la aprobación formal, aprobación con condiciones, rechazo o solicitud de más información sobre la solicitud de cambio.',main.innerHTML.slice(main.innerHTML.indexOf('<section')),r);
-  document.querySelector('#vote-form').onsubmit=async event=>{
-    event.preventDefault();const decision=document.querySelector('#own-vote').value;
-    const result=await saveAction(`/requests/${r.id}/vote`,{decision,revision:r.revision});
-    if(result){resolutionForm(result.request);toast('Tu voto quedó registrado.');}
-  };
+      field('registeredBy',currentUser.name,{readonly:true})+field('decisionDate','Automática al guardar',{readonly:true}))}<div class="form-actions"><a class="btn" href="#detalle/${r.id}">Cancelar</a><button class="btn primary">Guardar decisión</button></div></form>`;
+  main.innerHTML = formShell('decision','Decisión del Comité de Control de Cambios','El miembro activo del CCC registra la decisión final de la solicitud de cambio.',main.innerHTML.slice(main.innerHTML.indexOf('<form')),r);
   const form=document.querySelector('#resolution-form');
   form.addEventListener('change',()=>{const conditional=form.querySelector('input[name="decision"]:checked')?.value==='Aprobado con condiciones';form.querySelector('#conditions-wrap').hidden=!conditional;form.querySelector('#conditions').required=conditional;});
   form.onsubmit=async event=>{
     event.preventDefault();const data=Object.fromEntries(new FormData(form)),errors={};
-    const participants=[data.member1,data.member2].filter(Boolean);
-    if(!data.member1)errors.member1='Selecciona un integrante.';
-    if(participants.length===2&&participants[0]===participants[1])errors.member2='Selecciona un integrante diferente.';
-    if(!participants.includes(currentUser.id))errors.member1='El responsable debe participar.';
     if(!RESOLUTIONS.includes(data.decision))errors.decision='Selecciona la decisión final.';
     if(!String(data.decisionNote||'').trim())errors.decisionNote='Explica el motivo de la decisión.';
     if(data.decision==='Aprobado con condiciones'&&!String(data.conditions||'').trim())errors.conditions='Especifica las condiciones.';
     if(!showErrors(form,errors))return;
-    const result=await saveAction(`/requests/${r.id}/resolution`,{members:participants,decision:data.decision,decisionNote:data.decisionNote,conditions:data.conditions||'',revision:r.revision});
-    if(result){location.hash=`detalle/${r.id}`;route();toast('Resolución registrada por el CCC.');}
+    const result=await saveAction(`/requests/${r.id}/resolution`,{decision:data.decision,decisionNote:data.decisionNote,conditions:data.conditions||'',revision:r.revision});
+    if(result){location.hash=`detalle/${r.id}`;route();toast('Decisión final registrada por el CCC.');}
   };
 }
 function showErrors(form, errors) {
@@ -578,7 +563,7 @@ ${canEdit(r) ? `<a class="btn primary" href="#editar/${r.id}">${icon('edit')} Ed
 </section>
 </div>
 <div>
-<section class="card evaluation"><div class="detail-body"><h2>Flujo del CCC</h2><p>1. Petición registrada · ${r.requesterType === 'usuario' ? 'Usuario final' : 'Experto desarrollador (o registro anterior)'}</p><p>2. Análisis: ${r.analysis ? 'Completado' : 'Pendiente'}</p><p>3. Decisión: ${r.status === 'Pendiente' ? 'Pendiente' : esc(r.status)}</p>${canReview(r) && canEvaluate(r) ? `<a class="btn primary" href="#analisis/${r.id}">${r.analysis ? 'Revisar análisis' : 'Completar análisis'}</a>${r.analysis ? `<a class="btn" href="#decision/${r.id}">Registrar decisión</a>` : '<p class="hint">Completa el análisis para habilitar la decisión.</p>'}` : (canReview(r)?'<p>En espera de revisión del CCC.</p>':'<p>El proceso de esta petición ha finalizado.</p>')}${!r.requesterType ? '<p class="hint">Registro anterior: conserva sus datos e historial; puede no contener un análisis separado.</p>' : ''}${r.analysis ? `<h3>Análisis del CCC</h3><dl>${Object.keys(r.analysis).filter(k=>k!=='analystId').map(k=>definition(k==='date'?'analysisDate':k,k==='date'?dateLabel(r.analysis[k],true):r.analysis[k])).join('')}</dl>` : ''}${r.decision ? resolutionDetails(r.decision) : ''}${r.clarifications?.length ? `<h3>Información adicional</h3>${r.clarifications.map(c=>`<p>${esc(c.note)}</p><small>${esc(c.responsible)} · ${dateLabel(c.date,true)}</small>`).join('')}` : ''}${r.status==='Más información' && r.ownerId===currentUser.id ? '<form id="clarification-form"><label for="clarification-note">Información solicitada por el CCC</label><textarea id="clarification-note" required maxlength="5000"></textarea><button class="btn primary">Enviar información</button></form>' : ''}${r.resolutions?.length > 1 ? `<details><summary>Resoluciones anteriores (${r.resolutions.length-1})</summary>${r.resolutions.slice(0,-1).map(resolutionDetails).join('')}</details>` : ''}</div></section>
+<section class="card evaluation"><div class="detail-body"><h2>Flujo del CCC</h2><p>1. Petición registrada · ${r.requesterType === 'usuario' ? 'Usuario final' : 'Experto desarrollador (o registro anterior)'}</p><p>2. Análisis: ${r.analysis ? 'Completado' : 'Pendiente'}</p><p>3. Decisión: ${r.status === 'Pendiente' ? 'Pendiente' : esc(r.status)}</p>${canReview(r) && canEvaluate(r) ? (r.analysis ? `<a class="btn primary" href="#decision/${r.id}">Registrar decisión</a>` : `<a class="btn primary" href="#analisis/${r.id}">Completar análisis</a><p class="hint">Completa el análisis para habilitar la decisión.</p>`) : (canReview(r)?'<p>En espera de revisión del CCC.</p>':'<p>El proceso de esta petición ha finalizado.</p>')}${!r.requesterType ? '<p class="hint">Registro anterior: conserva sus datos e historial; puede no contener un análisis separado.</p>' : ''}${r.analysis ? `<h3>Análisis del CCC</h3><dl>${Object.keys(r.analysis).filter(k=>k!=='analystId').map(k=>definition(k==='date'?'analysisDate':k,k==='date'?dateLabel(r.analysis[k],true):r.analysis[k])).join('')}</dl>` : ''}${r.decision ? resolutionDetails(r.decision) : ''}${r.clarifications?.length ? `<h3>Información adicional anterior</h3>${r.clarifications.map(c=>`<p>${esc(c.note)}</p><small>${esc(c.responsible)} · ${dateLabel(c.date,true)}</small>`).join('')}` : ''}${r.status==='Más información' && r.ownerId===currentUser.id ? '<p>Para aclaraciones, comunícate fuera del sistema con un experto o miembro del CCC.</p>' : ''}${r.resolutions?.length > 1 ? `<details><summary>Resoluciones anteriores (${r.resolutions.length-1})</summary>${r.resolutions.slice(0,-1).map(resolutionDetails).join('')}</details>` : ''}</div></section>
 <section class="card">
 <div class="card-head">
 <div>
@@ -596,8 +581,6 @@ ${canEdit(r) ? `<a class="btn primary" href="#editar/${r.id}">${icon('edit')} Ed
 </section>
 </div>
 </div>`;
-  const clarification=document.querySelector('#clarification-form');
-  if(clarification)clarification.onsubmit=async event=>{event.preventDefault();const note=document.querySelector('#clarification-note').value.trim();if(!note)return;const result=await saveAction(`/requests/${r.id}/clarification`,{note,revision:r.revision});if(result){detail(result.request);toast('Información enviada. El CCC debe revisar nuevamente el análisis.');}};
 }
 
 function route() {

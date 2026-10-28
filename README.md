@@ -1,6 +1,6 @@
 # ChangeFlow · Control de cambios de ProyectoBusesUTA
 
-Aplicación académica de la UTA con frontend HTML/CSS/JavaScript, API Node.js y base SQLite. Incluye login, permisos por perfil, análisis del CCC, votos individuales y resolución formal. El backend utiliza módulos de Node.js, sin dependencias externas.
+Aplicación académica de la UTA con frontend HTML/CSS/JavaScript, API Node.js y base SQLite. Incluye login, permisos por perfil, análisis y decisión final del único CCC activo. El backend utiliza módulos de Node.js, sin dependencias externas.
 
 ## Iniciar
 
@@ -38,8 +38,7 @@ Las cuentas se crean solo una vez. Cambiar `SEED_PASSWORD` no cambia las contras
 Formulario público → Petición del usuario final (sin cuenta)
 Login → Petición del experto
       → Análisis del CCC
-      → Voto individual de cada participante
-      → Resolución: aprobado / condicionado / rechazado / más información
+      → Decisión del CCC: aprobado / condicionado / rechazado / más información
 ```
 
 Con sesión iniciada, el nombre y correo del experto proceden de su sesión. Sin cuenta, el usuario final proporciona su nombre y correo, que se registran como datos de contacto sin verificar. El correo no vincula la solicitud a una cuenta existente. El CCC no puede crear solicitudes, ni siquiera mediante la API.
@@ -48,22 +47,20 @@ Cada solicitante ve exclusivamente sus peticiones. El CCC puede consultar todas.
 
 ### Análisis
 
-El CCC registra impacto, impacto técnico, riesgos, viabilidad, esfuerzo, recursos, consideraciones y prioridad. El servidor obtiene la identidad del analista y la fecha. Actualizar el análisis invalida los votos previos y exige votar nuevamente.
+El CCC registra impacto, impacto técnico, riesgos, viabilidad, esfuerzo, recursos, consideraciones y prioridad. El servidor obtiene la identidad del analista y la fecha. Cada solicitud se analiza una sola vez antes de la decisión.
 
-### Votos y resolución
+### Decisión final
 
-El flujo de voto permanece temporalmente en esta versión: PabloMiembroCCC registra su propio voto antes de la resolución. La historia HU-08 del plan lo sustituirá por una decisión directa. El solicitante queda excluido por su ID de cuenta, no por comparar nombres.
-
-La resolución actual debe coincidir con el voto registrado por la única cuenta CCC activa.
+PabloMiembroCCC registra directamente la decisión final después del análisis, sin votos ni selección de participantes. El servidor identifica al responsable por la sesión y excluye al solicitante por su ID de cuenta.
 
 - **Aprobado:** finaliza la revisión; no significa que el cambio esté implementado.
 - **Aprobado con condiciones:** exige un texto con las restricciones o requisitos y finaliza la revisión.
 - **Rechazado:** exige motivo y finaliza la revisión.
-- **Más información:** conserva la resolución y mantiene abierto el expediente. El solicitante puede responder desde el detalle; su respuesta requiere un nuevo análisis y nuevos votos.
+- **Más información:** queda como decisión final. La consulta informa que la persona debe comunicarse fuera del sistema con un experto o miembro del CCC.
 
-El análisis, cada voto y las resoluciones se incorporan al historial. Cada resolución guarda la copia del análisis utilizado, participantes, votos, condiciones, responsable autenticado y fecha del servidor. Las resoluciones anteriores permanecen consultables.
+El análisis y la decisión se incorporan al historial. La decisión guarda la copia del análisis utilizado, condiciones, responsable autenticado y fecha del servidor. Los registros históricos anteriores permanecen almacenados.
 
-El botón **Actualizar** consulta cambios de otros participantes. Cada petición tiene una revisión numérica: un intento de guardar desde una versión antigua recibe un conflicto y recarga el expediente para evitar sobrescribir cambios ajenos. Actualizar la vista descarta los campos que aún no se hayan guardado.
+El botón **Actualizar** consulta cambios recientes. Cada petición tiene una revisión numérica: un intento de guardar desde una versión antigua recibe un conflicto y recarga el expediente para evitar sobrescribir cambios ajenos. Actualizar la vista descarta los campos que aún no se hayan guardado.
 
 ## Organización
 
@@ -103,12 +100,10 @@ Las rutas de login, `POST /api/public/requests` y `GET /api/public/status` no re
 | `POST /api/requests` | Registrar petición; genera código, fecha y propietario. |
 | `PATCH /api/requests/:id` | Editar una petición propia antes del análisis. |
 | `DELETE /api/requests/:id` | Eliminar una petición propia aún sin analizar. |
-| `POST /api/requests/:id/analysis` | Registrar análisis del CCC y renovar la etapa de votación. |
-| `POST /api/requests/:id/vote` | Voto del miembro autenticado. |
-| `POST /api/requests/:id/resolution` | Resolución con `members`, `decision`, `decisionNote` y `conditions` si corresponde. |
-| `POST /api/requests/:id/clarification` | Respuesta del solicitante: `note`. |
+| `POST /api/requests/:id/analysis` | Registrar una vez el análisis del CCC. |
+| `POST /api/requests/:id/resolution` | Decisión final con `decision`, `decisionNote` y `conditions` si corresponde. |
 
-No hay una ruta para reemplazar todo el historial o alterar libremente el estado. Código, identidad, roles, fecha, estado y votos de otros integrantes no se toman de campos enviados por el cliente.
+No hay una ruta para reemplazar todo el historial o alterar libremente el estado. Código, identidad, roles, fecha y estado no se toman de campos enviados por el cliente.
 
 ## Almacenamiento y sesiones
 
@@ -126,7 +121,7 @@ Los adjuntos continúan guardando únicamente nombres; no hay subida ni descarga
 
 `npm test` utiliza bases temporales y servidores locales efímeros. Comprueba las diez cuentas iniciales, la única cuenta CCC activa, permisos por rol, registro público sin cuenta, análisis y resolución actuales, persistencia y reinicio explícito de datos.
 
-La prueba del cliente verifica el formulario experto, el formulario público, la ausencia de «Nueva solicitud» para el CCC y el envío del voto y resolución actuales a la API.
+La prueba del cliente verifica el formulario experto, el formulario público, la ausencia de «Nueva solicitud» para el CCC y el envío de la decisión directa a la API.
 
 Para demostrarlo manualmente: entra como Leslie y crea una solicitud; luego entra como PabloMiembroCCC para analizarla y resolverla. Las pestañas del mismo perfil de navegador comparten la cookie de sesión.
 
@@ -134,7 +129,7 @@ Para demostrarlo manualmente: entra como Leslie y crea una solicitud; luego entr
 
 Los cuatro formularios utilizan la cabecera BusesUTA, las etapas Solicitud / Análisis / Decisión y las guías de los mockups. La guía lateral pasa debajo del formulario en pantallas pequeñas. Las áreas de texto incluyen contadores y la resolución muestra los resúmenes de solicitud y análisis.
 
-El tipo de solicitud se conserva en el servidor. El desarrollador puede indicar una prioridad propuesta; el CCC conserva la responsabilidad de establecer la prioridad durante el análisis. Se mantienen los campos requeridos por el flujo existente, los votos individuales y las restricciones por perfil. Los adjuntos siguen registrando solo nombres. Los botones de envío guardan en el servidor; no se simulan borradores ni cargas de archivos.
+El tipo de solicitud se conserva en el servidor. El desarrollador puede indicar una prioridad propuesta; el CCC conserva la responsabilidad de establecer la prioridad durante el análisis. Se mantienen los campos requeridos por el flujo y las restricciones por perfil. Los adjuntos siguen registrando solo nombres. Los botones de envío guardan en el servidor; no se simulan borradores ni cargas de archivos.
 
 ## Solicitudes sin cuenta
 

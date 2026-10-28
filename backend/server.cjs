@@ -78,7 +78,7 @@ function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','ch
       if(route==='/api/requests'&&req.method==='POST') {
         const data=await readJson(req),r=transaction(db,()=>createRequest(db,session,data));json(201,{request:r,store:snapshot(db,session)});return;
       }
-      const match=/^\/api\/requests\/(SCR-\d+)(?:\/(analysis|vote|resolution|clarification))?$/.exec(route);
+      const match=/^\/api\/requests\/(SCR-\d+)(?:\/(analysis|resolution))?$/.exec(route);
       if(match && (req.method==='POST'&&match[2] || req.method==='PATCH'&&!match[2] || req.method==='DELETE'&&!match[2])) {
         const data=await readJson(req),action=match[2]||(req.method==='DELETE'?'delete':'edit');
         const r=transaction(db,()=>mutate(db,match[1],action,session,data));json(200,{request:r,store:snapshot(db,session)});return;

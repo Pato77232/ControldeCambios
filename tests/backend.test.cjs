@@ -62,15 +62,21 @@ test('cinco expertos, cinco CCC, solo Pablo activo y permisos por rol',async()=>
     assert.equal((await other.call('/api/requests')).data.requests.length,0);
     assert.equal((await other.call(`/api/requests/${request.id}`,'PATCH',{...expertRequest,revision:request.revision})).status,403);
     assert.equal((await expert.call(`/api/requests/${request.id}/analysis`,'POST',{...analysis,revision:request.revision})).status,403);
-    assert.equal((await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{members:['ccc-pablo'],decision:'Aprobado',decisionNote:'Sin análisis',revision:request.revision})).status,409);
+    assert.equal((await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{decision:'Aprobado',decisionNote:'Sin análisis',revision:request.revision})).status,409);
     let result=await ccc.call(`/api/requests/${request.id}/analysis`,'POST',{...analysis,revision:request.revision});
     assert.equal(result.status,200);request=result.data.request;
     assert.equal(request.analysis.analyst,'PabloMiembroCCC');
-    result=await ccc.call(`/api/requests/${request.id}/vote`,'POST',{decision:'Aprobado',revision:request.revision});
-    assert.equal(result.status,200);request=result.data.request;
-    result=await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{members:['ccc-pablo'],decision:'Aprobado',decisionNote:'Cambio viable',revision:request.revision});
+    assert.equal((await ccc.call(`/api/requests/${request.id}/vote`,'POST',{decision:'Aprobado',revision:request.revision})).status,404);
+    assert.equal((await ccc.call(`/api/requests/${request.id}/analysis`,'POST',{...analysis,revision:request.revision})).status,409);
+    assert.equal((await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{decision:'Aprobado con condiciones',decisionNote:'Cambio viable',revision:request.revision})).status,400);
+    assert.equal((await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{decision:'Rechazado',decisionNote:'',revision:request.revision})).status,400);
+    result=await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{decision:'Aprobado',decisionNote:'Cambio viable',revision:request.revision});
     assert.equal(result.status,200);request=result.data.request;
     assert.equal(request.status,'Aprobada');
+    assert.equal(request.decision.responsibleId,'ccc-pablo');
+    assert.equal(request.decision.votes,undefined);
+    assert.equal(request.decision.date!==undefined,true);
+    assert.equal((await ccc.call(`/api/requests/${request.id}/resolution`,'POST',{decision:'Rechazado',decisionNote:'Otro resultado',revision:request.revision})).status,409);
     app.db.prepare("UPDATE users SET active=0 WHERE id='ccc-pablo'").run();
     assert.equal((await ccc.call('/api/auth/me')).status,401);
   } finally {await stop(app);}
@@ -134,8 +140,9 @@ test('consulta pública por código muestra solo estado y resúmenes neutros',as
     response=await ccc.call(`/api/requests/${r.id}/analysis`,'POST',{...analysis,revision:r.revision});assert.equal(response.status,200);r=response.data.request;
     response=await guest.call(endpoint(receipt.trackingCode));
     assert.equal(response.data.request.stage,'Analizada');assert.equal(response.data.request.timeline.length,2);
-    response=await ccc.call(`/api/requests/${r.id}/vote`,'POST',{decision:'Más información',revision:r.revision});r=response.data.request;
-    response=await ccc.call(`/api/requests/${r.id}/resolution`,'POST',{members:['ccc-pablo'],decision:'Más información',decisionNote:'Detalle privado de la decisión',revision:r.revision});assert.equal(response.status,200);
+    response=await ccc.call(`/api/requests/${r.id}/resolution`,'POST',{decision:'Más información',decisionNote:'Detalle privado de la decisión',revision:r.revision});assert.equal(response.status,200);r=response.data.request;
+    assert.equal((await ccc.call(`/api/requests/${r.id}/clarification`,'POST',{note:'No debe reabrirse',revision:r.revision})).status,404);
+    assert.equal((await ccc.call(`/api/requests/${r.id}/analysis`,'POST',{...analysis,revision:r.revision})).status,409);
     response=await guest.call(endpoint(receipt.trackingCode));
     assert.equal(response.data.request.stage,'Decisión ya tomada');
     assert.equal(response.data.request.result,'Más información');
