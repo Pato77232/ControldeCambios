@@ -1,101 +1,177 @@
 'use strict';
-const http=require('node:http');
-const path=require('node:path');
-const fs=require('node:fs');
-const {openDatabase,transaction}=require('./database.cjs');
-const {publicUser,verifyPassword,hashPassword,seedUsers,createSession,getSession}=require('./auth.cjs');
-const {HttpError,fail,snapshot,committee,createRequest,mutate}=require('./service.cjs');
-const ROOT=path.resolve(__dirname,'..');
-const STATIC=new Map([['/','index.html'],['/index.html','index.html'],['/wireframe.html','wireframe.html'],['/js/app.js','js/app.js'],['/js/print.js','js/print.js'],['/css/styles.css','css/styles.css']]);
-async function readJson(req) {
-  if(!String(req.headers['content-type']||'').startsWith('application/json'))fail(415,'Se requiere application/json.');
-  let body='';
-  for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>100_000)fail(413,'Solicitud demasiado grande.');}
-  let data;try{data=JSON.parse(body);}catch{fail(400,'JSON inválido.');}
-  if(!data||typeof data!=='object'||Array.isArray(data))fail(400,'Objeto JSON inválido.');
+const http = require('node:http');
+const path = require('node:path');
+const fs = require('node:fs');
+const { openDatabase, transaction } = require('./database.cjs');
+const { publicUser, verifyPassword, hashPassword, seedUsers, createSession, getSession } = require('./auth.cjs');
+const S = require('./service.cjs');
+const I = require('./ics.cjs');
+const R = require('./reports.cjs');
+const C = require('./catalog.cjs');
+const { listAudit } = require('./audit.cjs');
+const { HttpError, fail } = S;
+
+const ROOT = path.resolve(__dirname, '..');
+const STATIC = new Map([['/', 'index.html'], ['/index.html', 'index.html'], ['/wireframe.html', 'wireframe.html'], ['/js/app.js', 'js/app.js'], ['/js/print.js', 'js/print.js'], ['/css/styles.css', 'css/styles.css']]);
+const ACTIONS = ['receive', 'validate', 'request-info', 'clarification', 'evaluation', 'decision', 'reevaluate', 'assign', 'start', 'activity', 'git', 'ics-change', 'deviation', 'scope', 'send-to-tests', 'test', 'finish-tests', 'backout', 'review', 'close', 'close-rejected', 'reopen'];
+const KB = 1024, MB = 1024 * KB;
+async function readJson(req, limit = 200 * KB) {
+  if (!String(req.headers['content-type'] || '').startsWith('application/json')) fail(415, 'Se requiere application/json.');
+  const chunks = []; let size = 0;
+  for await (const chunk of req) { size += chunk.length; if (size > limit) fail(413, 'Solicitud demasiado grande. Revisa el tamaño de los adjuntos.'); chunks.push(chunk); }
+  let data; try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail(400, 'JSON inválido.'); }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) fail(400, 'Objeto JSON inválido.');
   return data;
 }
-function createApp({filename=process.env.DB_PATH||path.join(__dirname,'data','changeflow.sqlite'),seedPassword=process.env.SEED_PASSWORD,secureCookies=process.env.COOKIE_SECURE==='true',initialUsers}={}) {
-  const db=openDatabase(filename);
-  try{seedUsers(db,seedPassword,initialUsers);}catch(e){db.close();throw e;}
-  const publicAttempts=new Map();
-  const attempts=new Map(),dummyHash=hashPassword('Unused-Dummy-Password');
-  const cookie=token=>`changeflow_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${token?28800:0}${secureCookies?'; Secure':''}`;
-  const server=http.createServer(async(req,res)=>{
-    res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
-    const json=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
+function limiter(max, windowMs) {
+  const hits = new Map();
+  return ip => {
+    const t = Date.now();
+    for (const [k, v] of hits) if (v.until < t) hits.delete(k);
+    const entry = hits.get(ip) || { count: 0, until: t + windowMs };
+    return { blocked: entry.count >= max, add() { entry.count++; hits.set(ip, entry); }, clear() { hits.delete(ip); } };
+  };
+}
+function catalog() {
+  const { PROJECT, MODULES, STATES, ITIL, IMPACT, LEVELS, FEASIBILITY, DECISIONS, OPERATIONS, ENVIRONMENTS, DOWNTIME_UNITS, ACTIVITY_STATES, GIT_KINDS, TEST_STATES, TEST_OUTCOMES, ROLLOUT_COMPLIANCE, REVIEW_DECISIONS, BACKOUT_RESULTS, CLOSURE_RESULTS, ICS_STATES, ICS_KINDS, RELATION_TYPES, BASELINE_STATES, STAGES, ATTACHMENT_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_FILES } = C;
+  return { PROJECT, MODULES, STATES, ITIL, IMPACT, LEVELS, FEASIBILITY, DECISIONS, OPERATIONS, ENVIRONMENTS, DOWNTIME_UNITS, ACTIVITY_STATES, GIT_KINDS, TEST_STATES, TEST_OUTCOMES, ROLLOUT_COMPLIANCE, REVIEW_DECISIONS, BACKOUT_RESULTS, CLOSURE_RESULTS, ICS_STATES, ICS_KINDS, RELATION_TYPES, BASELINE_STATES, STAGES, EXTENSIONS: Object.keys(ATTACHMENT_TYPES), ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_FILES };
+}
+function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'data', 'changeflow.sqlite'), seedPassword = process.env.SEED_PASSWORD, secureCookies = process.env.COOKIE_SECURE === 'true', initialUsers } = {}) {
+  const db = openDatabase(filename);
+  try { seedUsers(db, seedPassword, initialUsers); } catch (e) { db.close(); throw e; }
+  const loginLimit = limiter(10, 15 * 60 * 1000), publicLimit = limiter(20, 60 * 60 * 1000), trackLimit = limiter(30, 60 * 60 * 1000);
+  const dummyHash = hashPassword('Unused-Dummy-Password');
+  const cookie = token => `changeflow_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${token ? 28800 : 0}${secureCookies ? '; Secure' : ''}`;
+  const tx = work => transaction(db, work);
+  const server = http.createServer(async (req, res) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'same-origin'); res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    const json = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); };
     try {
-      const url=new URL(req.url,'http://localhost'),route=url.pathname;
-      if(!route.startsWith('/api/')) {
-        if(!['GET','HEAD'].includes(req.method))fail(405,'Método no permitido.');
-        const file=STATIC.get(route);if(!file)fail(404,'Página no encontrada.');
-        const types={'.html':'text/html','.js':'text/javascript','.css':'text/css'};
-        res.writeHead(200,{'Content-Type':`${types[path.extname(file)]}; charset=utf-8`,'Cache-Control':'no-cache'});
-        res.end(req.method==='HEAD'?undefined:fs.readFileSync(path.join(ROOT,file)));return;
+      const url = new URL(req.url, 'http://localhost'), route = url.pathname, method = req.method, ip = req.socket.remoteAddress;
+      if (!route.startsWith('/api/')) {
+        if (!['GET', 'HEAD'].includes(method)) fail(405, 'Método no permitido.');
+        const file = STATIC.get(route); if (!file) fail(404, 'Página no encontrada.');
+        const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+        res.writeHead(200, { 'Content-Type': `${types[path.extname(file)]}; charset=utf-8`, 'Cache-Control': 'no-cache' });
+        res.end(method === 'HEAD' ? undefined : fs.readFileSync(path.join(ROOT, file))); return;
       }
-      const mutation=!['GET','HEAD'].includes(req.method);
-      if(mutation) {
-        const origin=req.headers.origin;
-        if(origin && origin!==`${secureCookies?'https':'http'}://${req.headers.host}`)fail(403,'Origen no permitido.');
+      const mutation = !['GET', 'HEAD'].includes(method);
+      if (mutation) {
+        const origin = req.headers.origin;
+        if (origin && origin !== `${secureCookies ? 'https' : 'http'}://${req.headers.host}`) fail(403, 'Origen no permitido.');
       }
-      if(route==='/api/auth/login'&&req.method==='POST') {
-        const data=await readJson(req),ip=req.socket.remoteAddress;
-        for(const [key,value] of attempts)if(value.until<Date.now())attempts.delete(key);
-        const attempt=attempts.get(ip)||{count:0,until:Date.now()+15*60*1000};
-        if(attempt.count>=10)fail(429,'Demasiados intentos. Espera 15 minutos.');
-        if(typeof data.email!=='string'||typeof data.password!=='string'||data.email.length>200||data.password.length>512)fail(400,'Credenciales inválidas.');
-        const user=db.prepare('SELECT * FROM users WHERE email=? AND active=1').get(data.email.trim().toLowerCase());
-        if(!verifyPassword(data.password,user?.password_hash||dummyHash)){attempt.count++;attempts.set(ip,attempt);fail(401,'Correo o contraseña incorrectos.');}
-        attempts.delete(ip);
-        const previous=getSession(db,req);if(previous)db.prepare('DELETE FROM sessions WHERE token_hash=?').run(previous.token_hash);
-        const session=createSession(db,user.id);res.setHeader('Set-Cookie',cookie(session.token));json(200,{user:publicUser(user),csrf:session.csrf});return;
+      // ---------- Rutas sin sesión ----------
+      if (route === '/api/catalog' && method === 'GET') { json(200, catalog()); return; }
+      if (route === '/api/auth/login' && method === 'POST') {
+        const data = await readJson(req), attempt = loginLimit(ip);
+        if (attempt.blocked) fail(429, 'Demasiados intentos. Espera 15 minutos.');
+        if (typeof data.email !== 'string' || typeof data.password !== 'string' || data.email.length > 200 || data.password.length > 512) fail(400, 'Credenciales inválidas.');
+        const user = db.prepare('SELECT * FROM users WHERE email=? AND active=1').get(data.email.trim().toLowerCase());
+        if (!verifyPassword(data.password, user?.password_hash || dummyHash)) { attempt.add(); fail(401, 'Correo o contraseña incorrectos.'); }
+        attempt.clear();
+        const previous = getSession(db, req); if (previous) db.prepare('DELETE FROM sessions WHERE token_hash=?').run(previous.token_hash);
+        const session = createSession(db, user.id); res.setHeader('Set-Cookie', cookie(session.token)); json(200, { user: publicUser(user), csrf: session.csrf }); return;
       }
-      if(route==='/api/public/requests'&&req.method==='POST') {
-        const now=Date.now(),ip=req.socket.remoteAddress;
-        for(const [key,value] of publicAttempts)if(value.until<now)publicAttempts.delete(key);
-        const attempt=publicAttempts.get(ip)||{count:0,until:now+60*60*1000};
-        if(attempt.count>=20)fail(429,'Has enviado demasiadas solicitudes. Intenta más tarde.');
-        attempt.count++;publicAttempts.set(ip,attempt);
-        const data=await readJson(req),r=transaction(db,()=>createRequest(db,null,data));
-        json(201,{receipt:{id:r.id,date:r.date,status:r.status}});return;
+      if (route === '/api/public/requests' && method === 'POST') {
+        const attempt = publicLimit(ip);
+        if (attempt.blocked) fail(429, 'Has enviado demasiadas solicitudes. Intenta más tarde.');
+        attempt.add();
+        const data = await readJson(req, 8 * MB), { request, trackingToken } = tx(() => S.createRequest(db, null, data));
+        json(201, { receipt: { id: request.id, date: request.date, status: request.status, trackingToken } }); return;
       }
-      if(route==='/api/public/dashboard'&&req.method==='GET') {
-        const rows=db.prepare("SELECT json_extract(document, '$.status') AS status, COUNT(*) AS count FROM requests GROUP BY status").all();
-        const totals=Object.fromEntries(rows.map(r=>[r.status,Number(r.count)]));
-        json(200,{counts:[rows.reduce((sum,r)=>sum+Number(r.count),0),(totals.Pendiente||0)+(totals['Más información']||0),(totals.Aprobada||0)+(totals['Aprobada con condiciones']||0),totals.Rechazada||0]});return;
+      if ((route === '/api/public/track' || route === '/api/public/track/clarification') && method === 'POST') {
+        const attempt = trackLimit(ip);
+        if (attempt.blocked) fail(429, 'Demasiadas consultas. Intenta más tarde.');
+        const data = await readJson(req, route.endsWith('clarification') ? 8 * MB : 10 * KB);
+        try { json(200, { request: route.endsWith('clarification') ? tx(() => S.publicClarification(db, data)) : S.trackRequest(db, data) }); }
+        catch (e) { if (e.status === 404) attempt.add(); throw e; }
+        return;
       }
-      const session=getSession(db,req);if(!session)fail(401,'Inicia sesión para continuar.');
-      if(mutation && req.headers['x-csrf-token']!==session.csrf)fail(403,'Sesión de formulario inválida. Actualiza la página.');
-      if(route==='/api/auth/me'&&req.method==='GET'){json(200,{user:publicUser(session),csrf:session.csrf});return;}
-      if(route==='/api/auth/logout'&&req.method==='POST'){db.prepare('DELETE FROM sessions WHERE token_hash=?').run(session.token_hash);res.setHeader('Set-Cookie',cookie(''));json(200,{ok:true});return;}
-      if(route==='/api/committee'&&req.method==='GET'){json(200,{users:session.role==='ccc'?committee(db):[]});return;}
-      if(route==='/api/requests'&&req.method==='GET'){json(200,snapshot(db,session));return;}
-      if(route==='/api/requests'&&req.method==='POST') {
-        const data=await readJson(req),r=transaction(db,()=>createRequest(db,session,data));json(201,{request:r,store:snapshot(db,session)});return;
+      if (route === '/api/public/dashboard' && method === 'GET') {
+        // Solo totales agregados: sin datos personales ni contenido de los expedientes.
+        const statuses = db.prepare("SELECT json_extract(document,'$.status') AS status, COUNT(*) AS n FROM requests GROUP BY status").all();
+        const by = Object.fromEntries(statuses.map(s => [s.status, Number(s.n)]));
+        const sum = list => list.reduce((n, s) => n + (by[s] || 0), 0);
+        json(200, { counts: { total: statuses.reduce((n, s) => n + Number(s.n), 0), review: sum(['Registrada', 'En validación', 'Pendiente de información', 'En análisis', 'En planificación', 'Pendiente de aprobación']), progress: sum(['Aprobada', 'Aprobada con condiciones', 'Asignada', 'En implementación', 'En pruebas', 'En revisión', 'Correcciones requeridas']), closed: sum(['Cerrada']), rejected: sum(['Rechazada']) } }); return;
       }
-      const match=/^\/api\/requests\/(SCR-\d+)(?:\/(analysis|resolution|clarification))?$/.exec(route);
-      if(match && (req.method==='POST'&&match[2] || req.method==='PATCH'&&!match[2] || req.method==='DELETE'&&!match[2])) {
-        const data=await readJson(req),action=match[2]||(req.method==='DELETE'?'delete':'edit');
-        const r=transaction(db,()=>mutate(db,match[1],action,session,data));json(200,{request:r,store:snapshot(db,session)});return;
+      // ---------- Rutas con sesión ----------
+      const session = getSession(db, req); if (!session) fail(401, 'Inicia sesión para continuar.');
+      if (mutation && req.headers['x-csrf-token'] !== session.csrf) fail(403, 'Sesión de formulario inválida. Actualiza la página.');
+      const user = session;
+      const store = () => S.snapshot(db, user);
+      if (route === '/api/auth/me' && method === 'GET') { json(200, { user: publicUser(session), csrf: session.csrf }); return; }
+      if (route === '/api/auth/logout' && method === 'POST') { db.prepare('DELETE FROM sessions WHERE token_hash=?').run(session.token_hash); res.setHeader('Set-Cookie', cookie('')); json(200, { ok: true }); return; }
+      if (route === '/api/committee' && method === 'GET') { json(200, { users: S.users(db).filter(u => u.role === 'ccc' && user.role === 'ccc').map(publicUser) }); return; }
+      if (route === '/api/users' && method === 'GET') { json(200, { users: user.role === 'usuario' ? [] : S.users(db).map(publicUser) }); return; }
+      if (route === '/api/requests' && method === 'GET') { json(200, store()); return; }
+      if (route === '/api/requests' && method === 'POST') {
+        const data = await readJson(req, 8 * MB), { request } = tx(() => S.createRequest(db, user, data)); json(201, { request, store: store() }); return;
       }
-      fail(404,'Ruta no encontrada.');
-    } catch(error) {
-      const status=error instanceof HttpError?error.status:500;
-      if(status===500)console.error(error);
-      if(!res.headersSent)json(status,{error:status===500?'No se pudo completar la operación.':error.message});else res.end();
+      let m = /^\/api\/requests\/((?:CRF|SCR)-\d+)(?:\/([a-z-]+))?$/.exec(route);
+      if (m) {
+        const [, id, action] = m;
+        if (!action && method === 'GET') { json(200, S.requestDetail(db, id, user)); return; }
+        if (action === 'attachments' && method === 'POST') { const data = await readJson(req, 12 * MB); const r = tx(() => S.uploadAttachments(db, id, user, data)); json(200, { request: r, store: store() }); return; }
+        if ((!action && ['PATCH', 'DELETE'].includes(method)) || (action && method === 'POST' && ACTIONS.includes(action))) {
+          const data = await readJson(req), name = action || (method === 'DELETE' ? 'delete' : 'edit');
+          const r = tx(() => S.mutate(db, id, name, user, data)); json(200, { request: r, store: store() }); return;
+        }
+      }
+      m = /^\/api\/attachments\/([a-f0-9]{24})$/.exec(route);
+      if (m && method === 'GET') {
+        const { row, content } = S.attachmentFor(db, m[1], user);
+        res.writeHead(200, { 'Content-Type': row.mime, 'Content-Length': content.length, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(row.filename)}`, 'Cache-Control': 'private, no-store' });
+        res.end(content); return;
+      }
+      if (user.role === 'usuario') fail(403, 'Esta sección está reservada al equipo técnico y al CCC.');
+      if (route === '/api/ics' && method === 'GET') { json(200, { items: I.listIcs(db), categories: I.categories(db) }); return; }
+      if (route === '/api/ics' && method === 'POST') { const data = await readJson(req); const ics = tx(() => I.createIcs(db, user, data)); json(201, { ics, items: I.listIcs(db) }); return; }
+      if (route === '/api/ics-categories' && method === 'POST') { const data = await readJson(req); json(201, { categories: tx(() => I.addCategory(db, user, data)) }); return; }
+      m = /^\/api\/ics\/(ICS-[A-Z]+-\d+)(?:\/(revisions|relations)(?:\/(\d+))?)?$/.exec(route);
+      if (m) {
+        const [, code, sub, relId] = m;
+        if (!sub && method === 'GET') { json(200, I.icsDetail(db, code, user)); return; }
+        if (!sub && method === 'PATCH') { const data = await readJson(req); tx(() => I.updateIcs(db, user, code, data)); json(200, I.icsDetail(db, code, user)); return; }
+        if (sub === 'revisions' && method === 'POST') { const data = await readJson(req); tx(() => I.addRevision(db, user, code, data)); json(200, I.icsDetail(db, code, user)); return; }
+        if (sub === 'relations' && method === 'POST' && !relId) { const data = await readJson(req); json(200, tx(() => I.addRelation(db, user, code, data))); return; }
+        if (sub === 'relations' && method === 'DELETE' && relId) { json(200, tx(() => I.removeRelation(db, user, code, relId))); return; }
+      }
+      if (route === '/api/baselines' && method === 'GET') { json(200, { baselines: I.listBaselines(db) }); return; }
+      if (route === '/api/baselines' && method === 'POST') { const data = await readJson(req); const code = tx(() => I.createBaseline(db, user, data)); json(201, { code, baselines: I.listBaselines(db) }); return; }
+      m = /^\/api\/baselines\/(LB-[A-Z]+-\d+)\/(items|submit|decide|delete)$/.exec(route);
+      if (m && method === 'POST') { const data = await readJson(req); json(200, { baselines: tx(() => I.baselineAction(db, user, m[1], m[2], data)) }); return; }
+      if ((route === '/api/reports' || route === '/api/reports.csv') && method === 'GET') {
+        const filters = Object.fromEntries([...url.searchParams].filter(([k, v]) => ['from', 'to', 'status', 'itilType', 'requester', 'developer', 'ics', 'module', 'priority', 'result'].includes(k) && v).map(([k, v]) => [k, v.slice(0, 200)]));
+        const data = R.report(db, user, filters);
+        if (route.endsWith('.csv')) { res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="reporte-cambios.csv"', 'Cache-Control': 'no-store' }); res.end(R.csv(data.rows)); return; }
+        json(200, data); return;
+      }
+      if (route === '/api/audit' && method === 'GET') {
+        const visible = new Set(S.allVisible(db, user).map(x => x.r.id));
+        json(200, { events: listAudit(db, { entityType: url.searchParams.get('entityType') || '', action: url.searchParams.get('action') || '', entityIds: user.role === 'ccc' ? null : visible }) }); return;
+      }
+      fail(404, 'Ruta no encontrada.');
+    } catch (error) {
+      const sqliteRule = /RAISE|constraint/i.test(String(error?.message)) && error?.code === 'ERR_SQLITE_ERROR';
+      const status = error instanceof HttpError ? error.status : sqliteRule ? 409 : 500;
+      if (status === 500) console.error(error);
+      const message = status === 500 ? 'No se pudo completar la operación.' : sqliteRule ? `Regla de integridad: ${String(error.message).replace(/^.*?:\s*/, '')}` : error.message;
+      if (!res.headersSent) json(status, { error: message }); else res.end();
     }
   });
-  server.on('close',()=>db.close());
-  return {server,db};
+  server.on('close', () => db.close());
+  return { server, db };
 }
-if(require.main===module) {
+if (require.main === module) {
   try {
-    const {server}=createApp();
-    const port=Number(process.env.PORT||3000),host=process.env.HOST||'127.0.0.1';
-    server.on('error',error=>{console.error(`No se pudo iniciar el servidor: ${error.code}. Revisa HOST y PORT en .env.`);process.exitCode=1;server.close();});
-    server.listen(port,host,()=>console.log(`Transviajes disponible en http://${host}:${port}`));
-    const close=()=>server.close(()=>process.exit(0));process.on('SIGINT',close);process.on('SIGTERM',close);
-  }catch(e){console.error(e.message);process.exitCode=1;}
+    // --demo: usa la base de demostración separada (npm run demo:reset la crea).
+    if (process.argv.includes('--demo')) process.env.DB_PATH = require('./demo.cjs').DEMO;
+    const { server } = createApp();
+    const port = Number(process.env.PORT || 3000), host = process.env.HOST || '127.0.0.1';
+    server.on('error', error => { console.error(`No se pudo iniciar el servidor: ${error.code}. Revisa HOST y PORT en .env.`); process.exitCode = 1; server.close(); });
+    server.listen(port, host, () => console.log(`Transviajes · Control de cambios disponible en http://${host}:${port}`));
+    const close = () => server.close(() => process.exit(0)); process.on('SIGINT', close); process.on('SIGTERM', close);
+  } catch (e) { console.error(e.message); process.exitCode = 1; }
 }
-module.exports={createApp};
+module.exports = { createApp };

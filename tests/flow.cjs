@@ -1,65 +1,74 @@
 'use strict';
-// Prueba de los manejadores del cliente con respuestas de API controladas.
-// Las autorizaciones y las transacciones reales se prueban en backend.test.cjs.
-const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
-const nodes=new Map();
-function node(id){
-  if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',innerHTML:'',hidden:false,dataset:{},classList:{toggle(){}},setAttribute(){},removeAttribute(){},addEventListener(){},focus(){},querySelector:node,querySelectorAll:()=>[],showModal(){}});
-  return nodes.get(id);
+// Prueba del cliente con una API real (servidor efímero y base de demostración en memoria) y un DOM mínimo.
+// Verifica que cada pantalla se genere sin errores y que la interfaz muestre solo las opciones de cada rol.
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const { createApp } = require('../backend/server.cjs');
+const { buildDemo } = require('../backend/demo.cjs');
+const PASSWORD = 'Test-ChangeFlow-2026!';
+
+function dom() {
+  const nodes = new Map();
+  const node = id => {
+    if (!nodes.has(id)) nodes.set(id, { id, value: '', textContent: '', innerHTML: '', hidden: false, dataset: {}, elements: [], files: [], classList: { toggle() {} }, setAttribute() {}, removeAttribute() {}, addEventListener() {}, focus() {}, querySelector: sel => node(`${id} ${sel}`), querySelectorAll: () => [], showModal() {}, scrollIntoView() {} });
+    return nodes.get(id);
+  };
+  return { nodes, node };
 }
-const user={id:'user-ana',name:'Ana Martínez',email:'ana@changeflow.local',role:'usuario'};
-const committee=[{id:'ccc-carlos',name:'Carlos Pérez',role:'ccc'},{id:'ccc-maria',name:'María López',role:'ccc'}];
-let active=user,requests=[],calls=[],publicFailure=false;
-const fetch=async(url,options={})=>{
-  const body=options.body?JSON.parse(options.body):{};calls.push({url,...options,data:body});
-  if(url==='/api/public/requests' && publicFailure)return {ok:false,status:400,json:async()=>({error:'Revisa los datos de la solicitud.'})};
-  let result;
-  if(url==='/api/auth/me'||url==='/api/auth/login')result={user:active,csrf:'csrf-from-server'};
-  else if(url==='/api/public/requests')result={receipt:{id:'SCR-0008',date:'2026-10-27',status:'Pendiente'}};
-  else if(url==='/api/committee')result={users:active.role==='ccc'?committee:[]};
-  else if(url==='/api/requests'&&!options.body)result={nextId:1,requests};
-  else if(url==='/api/auth/logout')result={ok:true};
-  else if(url==='/api/requests'){
-    const r={...body,id:'SCR-0007',ownerId:active.id,name:active.name,email:active.email,date:'2026-10-23',revision:1,status:'Pendiente',priority:'Media',history:[],resolutions:[]};requests=[r];result={request:r,store:{nextId:8,requests}};
-  } else result={request:requests[0],store:{nextId:8,requests}};
-  return {ok:true,status:200,json:async()=>result};
-};
-class FormDataMock {static data={};constructor(){return Object.entries(FormDataMock.data)[Symbol.iterator]();}}
-const context=vm.createContext({console,Date,Intl,Set,Map,String,Number,Array,Object,Math,JSON,Error,Promise,fetch,FormData:FormDataMock,setTimeout:()=>0,setInterval:()=>0,clearTimeout(){},location:{hash:'#panel'},window:{scrollTo(){},addEventListener(){}},document:{querySelector:id=>id==='#clarification-form'?null:node(id),querySelectorAll:()=>[],addEventListener(){},getElementById:id=>node('#'+id)}});
-const run=source=>vm.runInContext(source,context);
-const submit=async(id,data)=>{FormDataMock.data=data;await node(id).onsubmit({preventDefault(){},currentTarget:node(id)});};
-(async()=>{
-  run(fs.readFileSync('js/app.js','utf8').replace(/bootstrap\(\);\s*$/,'const ready=bootstrap();'));
-  await run('ready');assert.equal(run('currentUser.id'),user.id);assert.equal(run('csrfToken'),'csrf-from-server');
-  run("location.hash='#nueva';route()");assert.match(node('main').innerHTML,/Solicitud de cambio – Usuario final/);assert.doesNotMatch(node('main').innerHTML,/id="specId"/);
-  assert.match(node('main').innerHTML,/id="name"[^>]*readonly/);
-  const common={name:user.name,email:user.email,project:'Proyecto',module:'Autenticación y usuarios',title:'Solicitud de prueba',currentBehavior:'Mensaje confuso',description:'Necesitamos mensajes de error comprensibles.',justification:'Ayudará a los usuarios a corregir sus datos.',result:'Mensaje claro'};
-  await submit('#request-form',{});assert.match(node('#name-error').textContent,/obligatorio/);
-  await submit('#request-form',common);assert.equal(context.location.hash,'detalle/SCR-0007');
-  const create=calls.find(c=>c.url==='/api/requests'&&c.method==='POST');assert.equal(create.data.requesterType,'usuario');assert.equal(create.headers['X-CSRF-Token'],'csrf-from-server');
-  run('committeeForm(store.requests[0])');assert.match(node('main').innerHTML,/Solo un miembro independiente/);
-  active=committee[0];context.committeeUser=active;run('currentUser=committeeUser');await run('loadStore()');
-  requests[0].analysis={analyst:'Carlos Pérez',analystId:'ccc-carlos',impact:'Medio',feasibility:'Viable',effort:'24 horas',considerations:'Revisar pruebas'};requests[0].committeeVotes=[];
-  run('resolutionForm(store.requests[0])');assert.match(node('main').innerHTML,/id="resolution-form"/);assert.doesNotMatch(node('main').innerHTML,/vote-form|own-vote|member1|member2/);
-  await submit('#resolution-form',{decision:'Aprobado',decisionNote:'Cambio viable según el análisis'});
-  const resolution=calls.find(c=>c.url.endsWith('/resolution'));assert.equal(resolution.data.decision,'Aprobado');assert.equal(resolution.data.members,undefined);assert.equal(resolution.data.votes,undefined);assert.equal(resolution.data.responsible,undefined);
-  context.otherCommittee=committee[1];run('currentUser=otherCommittee;resolutionForm(store.requests[0])');assert.doesNotMatch(node('main').innerHTML,/id="resolution-form"/);run('currentUser=committeeUser');
-  requests.push({...requests[0],id:'SCR-0008',ownerId:null,submittedWithoutAccount:true,title:'Solicitud pública recibida'});
-  run("location.hash='#panel'");await run('refreshPanel()');assert.match(node('main').innerHTML,/Solicitud pública recibida/);
-  const beforeEdit=node('main').innerHTML;run("location.hash='#nueva/experto'");requests.push({...requests[0],id:'SCR-0009'});await run('refreshPanel()');assert.equal(node('main').innerHTML,beforeEdit);
-  run("currentUser=null;location.hash='#login';route()");assert.match(node('main').innerHTML,/id="login-form"/);
-  run("location.hash='#nueva/usuario';route()");assert.match(node('main').innerHTML,/id="request-form"/);
-  assert.doesNotMatch(node('main').innerHTML,/id="name"[^>]*readonly/);
-  assert.doesNotMatch(node('main').innerHTML,/id="email"[^>]*readonly/);
-  publicFailure=true;
-  await submit('#request-form',{...common,name:'Visitante',email:'visitante@example.com'});
-  assert.match(node('#request-error').textContent,/Revisa los datos/);
-  assert.match(node('main').innerHTML,/id="request-form"/);
-  publicFailure=false;
-  await submit('#request-form',{...common,name:'Visitante',email:'visitante@example.com'});
-  assert.equal(calls.find(c=>c.url==='/api/public/requests').data.requesterType,'usuario');
-  assert.match(node('main').innerHTML,/Solicitud enviada/);assert.match(node('main').innerHTML,/SCR-0008/);
-  run("location.hash='#nueva/experto';route()");assert.match(node('main').innerHTML,/id="login-form"/);
-  assert.equal(run("esc('<script>')"),'&lt;script&gt;');
-  console.log('OK cliente: sesión, formulario por perfil, identidad de solo lectura, rutas protegidas y resolución por el analista responsable a la API.');
-})().catch(error=>{console.error(error);process.exitCode=1;});
+(async () => {
+  const app = createApp({ filename: ':memory:', seedPassword: PASSWORD });
+  buildDemo(app.db);
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  try {
+    for (const [email, role] of [[null, 'invitado'], ['david@uta.edu.ec', 'ccc'], ['edwin@uta.edu.ec', 'experto']]) {
+      let cookie = '';
+      if (email) {
+        const res = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: PASSWORD }) });
+        assert.equal(res.status, 200); cookie = res.headers.get('set-cookie').split(';')[0];
+      }
+      const { node } = dom();
+      const fetchWithCookie = (url, options = {}) => fetch(base + url, { ...options, headers: { ...(options.headers || {}), ...(cookie ? { Cookie: cookie } : {}) } });
+      const context = vm.createContext({ console, Date, Intl, Set, Map, String, Number, Array, Object, Math, JSON, Error, Promise, URLSearchParams, Buffer, btoa: s => Buffer.from(s, 'binary').toString('base64'), fetch: fetchWithCookie, setTimeout: () => 0, setInterval: () => 0, clearTimeout() {}, location: { hash: '#panel' }, window: { scrollTo() {}, addEventListener() {}, confirm: () => true, print() {} }, document: { querySelector: id => node(id), querySelectorAll: () => [], addEventListener() {}, getElementById: id => node('#' + id), visibilityState: 'visible' } });
+      const run = source => vm.runInContext(source, context);
+      run(fs.readFileSync('js/app.js', 'utf8').replace(/bootstrap\(\);\s*$/, 'globalThis.ready = bootstrap();'));
+      await run('ready');
+      const html = () => node('main').innerHTML;
+      const show = async hash => { run(`location.hash = ${JSON.stringify(hash)}; route();`); await new Promise(r => setImmediate(r)); await new Promise(r => setTimeout(r, 60)); return html(); };
+      const nav = () => node('.app-nav').innerHTML;
+      if (role === 'invitado') {
+        assert.match(nav(), /Seguimiento/); assert.doesNotMatch(nav(), /Catálogo de ICS/);
+        const form = await show('#nueva');
+        assert.match(form, /CRF\) · Usuario final/); assert.doesNotMatch(form, /modificationType/); assert.match(form, /id="f-name"[^>]*required/); assert.doesNotMatch(form, /id="f-name"[^>]*readonly/);
+        assert.doesNotMatch(form, /itilType|rolloutSteps|developerId/, 'el usuario final no fija datos internos');
+        assert.match(await show('#seguimiento'), /Clave de seguimiento/);
+        assert.match(await show('#detalle/CRF-000001'), /Iniciar sesión|login/);
+      } else if (role === 'ccc') {
+        assert.match(nav(), /Catálogo de ICS/); assert.match(nav(), /Auditoría/); assert.doesNotMatch(nav(), /Nueva solicitud/);
+        assert.match(await show('#nueva'), /no puede presentarlas/);
+        const d4 = await show('#detalle/CRF-000004');
+        assert.match(d4, /Recibir solicitud/); assert.match(d4, /Solicitud original/);
+        const d1 = await show('#detalle/CRF-000001');
+        assert.match(d1, /Reabrir solicitud/); assert.match(d1, /Auditoría de configuración/); assert.match(d1, /Registrado manualmente; no verificado/);
+        assert.doesNotMatch(d1, /Registrar ejecución de prueba/);
+        assert.match(await show('#ics'), /ICS-BUS-001/);
+        assert.match(await show('#ics/ICS-BUS-001'), /Trazabilidad con solicitudes de cambio/);
+        assert.match(await show('#lineas-base'), /LB-BUS-002/);
+        const rep = await show('#reportes');
+        assert.match(rep, /Por tipo ITIL/); assert.match(rep, /Exportar CSV/);
+        assert.match(await show('#auditoria'), /Eventos persistentes/);
+        const fichaHtml = await show('#ficha/CRF-000002');
+        assert.match(fichaHtml, /Esta ficha|Ficha del CCC/);
+      } else {
+        assert.match(nav(), /Nueva solicitud/); assert.match(nav(), /Catálogo de ICS/);
+        const form = await show('#nueva');
+        assert.match(form, /Propuesta técnica/); assert.match(form, /id="f-name"[^>]*readonly/); assert.match(form, /data-group="suggestedIcs"/);
+        assert.match(await show('#ficha/CRF-000001'), /Ficha no disponible/);
+        const d = await show('#detalle/CRF-000001');
+        assert.doesNotMatch(d, /Reabrir solicitud|Decidir la autorización/);
+        assert.match(await show('#ics'), /Proponer un ICS/);
+        assert.match(await show('#panel'), /Mis tareas/);
+      }
+    }
+    console.log('OK cliente: pantallas por rol, formularios CRF, ficha del CCC, ICS, líneas base, reportes y auditoría generados con la API real.');
+  } finally { await new Promise(resolve => app.server.close(resolve)); }
+})().catch(error => { console.error(error); process.exitCode = 1; });

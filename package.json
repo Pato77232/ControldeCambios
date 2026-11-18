@@ -1,13 +1,15 @@
 {
   "name": "changeflow-uta",
-  "version": "2.0.0",
+  "version": "4.0.0",
   "private": true,
-  "description": "Gestión de cambios con autenticación y resolución del CCC",
+  "description": "Control de cambios de BusesUTA: CRF, ficha del CCC, ICS, líneas base, implementación, pruebas, revisión, cierre y auditoría",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env backend/server.cjs",
+    "start:demo": "node --env-file-if-exists=.env backend/server.cjs --demo",
+    "demo:reset": "node --env-file-if-exists=.env backend/demo.cjs",
     "test": "node --test tests/backend.test.cjs && node tests/flow.cjs",
     "check": "node --check js/app.js && node --check backend/server.cjs",
     "accounts:sync": "node --env-file-if-exists=.env backend/configure-team.cjs"
