@@ -1317,3 +1317,11 @@ input[aria-invalid=true],select[aria-invalid=true],textarea[aria-invalid=true],.
 @media print{.case-nav{display:none}.case-layout{display:block}}
 .case-layout>*{min-width:0}
 .case-nav nav,.case-nav ul{min-width:0;max-width:100%}
+
+/* ---------- Módulos afectados ---------- */
+.module-icon{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:#eaf3ff;color:#1f5fbf}
+.module-icon svg{width:16px;height:16px}
+.ics-card.selected .module-icon{background:#2563eb;color:#fff}
+.chip-list{display:flex;flex-wrap:wrap;gap:6px}
+.module-chip{display:inline-flex;gap:6px;align-items:center;padding:4px 10px;border-radius:999px;background:#eef4fb;color:#24467f;font-size:12px;font-weight:600}
+.module-chip svg{width:14px;height:14px}

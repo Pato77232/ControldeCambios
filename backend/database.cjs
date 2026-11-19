@@ -3,7 +3,6 @@ const { DatabaseSync } = require('node:sqlite');
 const { mkdirSync } = require('node:fs');
 const { dirname } = require('node:path');
 const { migrateDocument } = require('./migrate.cjs');
-const { ICS_CATEGORIES } = require('./catalog.cjs');
 
 function openDatabase(filename) {
   if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true });
@@ -23,7 +22,8 @@ function openDatabase(filename) {
     });
   }
   if (!db.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'active')) db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
-  // Versión 4: catálogo de ICS, líneas base, relaciones CRF-ICS, adjuntos reales y auditoría persistente.
+  // Versión 4: adjuntos reales y auditoría persistente. Las tablas de ICS y líneas base ya no se usan
+  // (la gestión se hace por módulos), pero se conservan para no perder datos registrados anteriormente.
   db.exec(`
     CREATE TABLE IF NOT EXISTS ics_categories(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE COLLATE NOCASE,created_by TEXT,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS ics(
@@ -80,11 +80,6 @@ function openDatabase(filename) {
     CREATE TRIGGER IF NOT EXISTS baseline_closed BEFORE UPDATE ON baselines WHEN OLD.status IN ('Aprobada','Rechazada') BEGIN SELECT RAISE(ABORT,'Una línea base decidida no puede modificarse.'); END;
     CREATE TRIGGER IF NOT EXISTS baseline_no_delete BEFORE DELETE ON baselines WHEN OLD.status<>'Borrador' BEGIN SELECT RAISE(ABORT,'Solo se puede eliminar una línea base en borrador.'); END;
   `);
-  if (!db.prepare('SELECT COUNT(*) AS n FROM ics_categories').get().n) {
-    const insert = db.prepare('INSERT INTO ics_categories(name,created_by,created_at) VALUES(?,?,?)');
-    const at = new Date().toISOString();
-    for (const name of ICS_CATEGORIES) insert.run(name, null, at);
-  }
   if (db.prepare('PRAGMA user_version').get().user_version < 4) {
     transaction(db, () => {
       const update = db.prepare('UPDATE requests SET document=? WHERE id=?');

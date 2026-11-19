@@ -3,6 +3,7 @@
 // Verifica que cada pantalla se genere sin errores y que la interfaz muestre solo las opciones de cada rol.
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const { createApp } = require('../backend/server.cjs');
+const { createGithub } = require('../backend/github.cjs');
 const { buildDemo } = require('../backend/demo.cjs');
 const PASSWORD = 'Test-ChangeFlow-2026!';
 
@@ -15,7 +16,7 @@ function dom() {
   return { nodes, node };
 }
 (async () => {
-  const app = createApp({ filename: ':memory:', seedPassword: PASSWORD });
+  const app = createApp({ filename: ':memory:', seedPassword: PASSWORD, github: createGithub({}) });
   buildDemo(app.db);
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}`;
@@ -35,6 +36,9 @@ function dom() {
       const html = () => node('main').innerHTML;
       const show = async hash => { run(`location.hash = ${JSON.stringify(hash)}; route();`); await new Promise(r => setImmediate(r)); await new Promise(r => setTimeout(r, 60)); return html(); };
       const nav = () => node('.app-nav').innerHTML;
+      // Las tarjetas (sin atributo name) deben enviarse agrupadas por data-group.
+      const collected = run("collect({ elements: [{ dataset: { group: 'modules' }, type: 'checkbox', checked: true, value: 'Cooperativas' }, { dataset: { group: 'modules' }, type: 'checkbox', checked: false, value: 'Notificaciones' }, { dataset: {}, name: 'title', type: 'text', value: ' Título ' }] })");
+      assert.deepEqual(JSON.parse(JSON.stringify(collected)), { modules: ['Cooperativas'], title: 'Título' });
       if (role === 'invitado') {
         assert.match(nav(), /Seguimiento/); assert.doesNotMatch(nav(), /Catálogo de ICS|data-nav="panel"/);
         const start = await show('#panel');
@@ -45,34 +49,31 @@ function dom() {
         assert.match(await show('#seguimiento'), /Clave de seguimiento/);
         assert.match(await show('#detalle/CRF-000001'), /Iniciar sesión|login/);
       } else if (role === 'ccc') {
-        assert.match(nav(), /Catálogo de ICS/); assert.match(nav(), /Auditoría/); assert.doesNotMatch(nav(), /Nueva solicitud/);
+        assert.doesNotMatch(nav(), /Catálogo de ICS|Líneas base/); assert.match(nav(), /Auditoría/); assert.doesNotMatch(nav(), /Nueva solicitud/);
         assert.match(await show('#nueva'), /no puede presentarlas/);
         const d4 = await show('#detalle/CRF-000004');
         assert.match(d4, /Recibir solicitud/); assert.match(d4, /Solicitud original/); assert.match(d4, /case-nav/); assert.match(d4, /Corregir CRF/);
         const fix = await show('#editar/CRF-000004');
-        assert.match(fix, /Motivo de la corrección/); assert.match(fix, /class="ics-picker"/);
+        assert.match(fix, /Motivo de la corrección/); assert.match(fix, /data-group="modules"/); assert.match(fix, /value="Notificaciones" checked/);
         const d1 = await show('#detalle/CRF-000001');
-        assert.match(d1, /Reabrir solicitud/); assert.match(d1, /Auditoría de configuración/); assert.match(d1, /Registrado manualmente; no verificado/);
+        assert.match(d1, /Reabrir solicitud/); assert.match(d1, /Pruebas, revisión y cierre/); assert.doesNotMatch(d1, /Auditoría de configuración|data-jump="sec-tests"|data-jump="sec-audit"|data-jump="sec-ics"/); assert.match(d1, /Módulos realmente modificados/); assert.match(d1, /GitHub sin configurar/); assert.match(d1, /Define GITHUB_REPO/);
         assert.doesNotMatch(d1, /Registrar ejecución de prueba/);
-        assert.match(await show('#ics'), /ICS-BUS-001/);
-        assert.match(await show('#ics/ICS-BUS-001'), /Trazabilidad con solicitudes de cambio/);
-        assert.match(await show('#lineas-base'), /LB-BUS-002/);
+        assert.match(await show('#ics'), /Mis tareas/, 'las rutas de ICS vuelven al panel');
         const rep = await show('#reportes');
         assert.match(rep, /Por tipo ITIL/); assert.match(rep, /Exportar CSV/);
         assert.match(await show('#auditoria'), /Eventos persistentes/);
         const fichaHtml = await show('#ficha/CRF-000002');
         assert.match(fichaHtml, /Esta ficha|Ficha del CCC/);
       } else {
-        assert.match(nav(), /Nueva solicitud/); assert.match(nav(), /Catálogo de ICS/);
+        assert.match(nav(), /Nueva solicitud/); assert.doesNotMatch(nav(), /Catálogo de ICS/);
         const form = await show('#nueva');
-        assert.match(form, /Propuesta técnica/); assert.match(form, /identity-note/); assert.doesNotMatch(form, /id="f-name"|id="f-code"/); assert.match(form, /class="ics-card/); assert.match(form, /data-version/);
+        assert.match(form, /Propuesta técnica/); assert.match(form, /identity-note/); assert.doesNotMatch(form, /id="f-name"|id="f-code"/); assert.match(form, /data-group="modules"/); assert.doesNotMatch(form, /suggestedIcs|ICS/); assert.match(form, /data-version/);
         assert.match(await show('#ficha/CRF-000001'), /Ficha no disponible/);
         const d = await show('#detalle/CRF-000001');
         assert.doesNotMatch(d, /Reabrir solicitud|Decidir la autorización/);
-        assert.match(await show('#ics'), /Proponer un ICS/);
         assert.match(await show('#panel'), /Mis tareas/);
       }
     }
-    console.log('OK cliente: pantallas por rol, formularios CRF, ficha del CCC, ICS, líneas base, reportes y auditoría generados con la API real.');
+    console.log('OK cliente: pantallas por rol, formularios CRF, ficha del CCC, módulos, GitHub, reportes y auditoría generados con la API real.');
   } finally { await new Promise(resolve => app.server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

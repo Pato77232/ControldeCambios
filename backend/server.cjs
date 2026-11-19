@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const { openDatabase, transaction } = require('./database.cjs');
 const { publicUser, verifyPassword, hashPassword, seedUsers, createSession, getSession } = require('./auth.cjs');
 const S = require('./service.cjs');
-const I = require('./ics.cjs');
+const { createGithub, milestoneComment } = require('./github.cjs');
 const R = require('./reports.cjs');
 const C = require('./catalog.cjs');
 const { listAudit } = require('./audit.cjs');
@@ -13,7 +13,7 @@ const { HttpError, fail } = S;
 
 const ROOT = path.resolve(__dirname, '..');
 const STATIC = new Map([['/', 'index.html'], ['/index.html', 'index.html'], ['/wireframe.html', 'wireframe.html'], ['/js/app.js', 'js/app.js'], ['/js/print.js', 'js/print.js'], ['/css/styles.css', 'css/styles.css']]);
-const ACTIONS = ['receive', 'validate', 'request-info', 'clarification', 'evaluation', 'decision', 'reevaluate', 'assign', 'start', 'activity', 'git', 'ics-change', 'deviation', 'scope', 'send-to-tests', 'test', 'finish-tests', 'backout', 'review', 'close', 'close-rejected', 'reopen'];
+const ACTIONS = ['receive', 'validate', 'request-info', 'clarification', 'evaluation', 'decision', 'reevaluate', 'assign', 'start', 'activity', 'git', 'git-refresh', 'module-change', 'deviation', 'scope', 'send-to-tests', 'test', 'finish-tests', 'backout', 'review', 'close', 'close-rejected', 'reopen'];
 const KB = 1024, MB = 1024 * KB;
 async function readJson(req, limit = 200 * KB) {
   if (!String(req.headers['content-type'] || '').startsWith('application/json')) fail(415, 'Se requiere application/json.');
@@ -33,16 +33,36 @@ function limiter(max, windowMs) {
   };
 }
 function catalog() {
-  const { PROJECT, MODULES, STATES, ITIL, IMPACT, LEVELS, FEASIBILITY, DECISIONS, OPERATIONS, ENVIRONMENTS, DOWNTIME_UNITS, ACTIVITY_STATES, GIT_KINDS, TEST_STATES, TEST_OUTCOMES, ROLLOUT_COMPLIANCE, REVIEW_DECISIONS, BACKOUT_RESULTS, CLOSURE_RESULTS, ICS_STATES, ICS_KINDS, RELATION_TYPES, BASELINE_STATES, STAGES, ATTACHMENT_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_FILES } = C;
-  return { PROJECT, MODULES, STATES, ITIL, IMPACT, LEVELS, FEASIBILITY, DECISIONS, OPERATIONS, ENVIRONMENTS, DOWNTIME_UNITS, ACTIVITY_STATES, GIT_KINDS, TEST_STATES, TEST_OUTCOMES, ROLLOUT_COMPLIANCE, REVIEW_DECISIONS, BACKOUT_RESULTS, CLOSURE_RESULTS, ICS_STATES, ICS_KINDS, RELATION_TYPES, BASELINE_STATES, STAGES, EXTENSIONS: Object.keys(ATTACHMENT_TYPES), ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_FILES };
+  const { PROJECT, MODULES, STATES, ITIL, IMPACT, LEVELS, FEASIBILITY, DECISIONS, OPERATIONS, ENVIRONMENTS, DOWNTIME_UNITS, ACTIVITY_STATES, GIT_KINDS, TEST_STATES, TEST_OUTCOMES, ROLLOUT_COMPLIANCE, REVIEW_DECISIONS, BACKOUT_RESULTS, CLOSURE_RESULTS, STAGES, ATTACHMENT_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_FILES } = C;
+  return { PROJECT, MODULES, STATES, ITIL, IMPACT, LEVELS, FEASIBILITY, DECISIONS, OPERATIONS, ENVIRONMENTS, DOWNTIME_UNITS, ACTIVITY_STATES, GIT_KINDS, TEST_STATES, TEST_OUTCOMES, ROLLOUT_COMPLIANCE, REVIEW_DECISIONS, BACKOUT_RESULTS, CLOSURE_RESULTS, STAGES, EXTENSIONS: Object.keys(ATTACHMENT_TYPES), ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_FILES };
 }
-function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'data', 'changeflow.sqlite'), seedPassword = process.env.SEED_PASSWORD, secureCookies = process.env.COOKIE_SECURE === 'true', initialUsers } = {}) {
+function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'data', 'changeflow.sqlite'), seedPassword = process.env.SEED_PASSWORD, secureCookies = process.env.COOKIE_SECURE === 'true', initialUsers, github = createGithub({ repo: process.env.GITHUB_REPO, token: process.env.GITHUB_TOKEN, apiUrl: process.env.GITHUB_API_URL }), appUrl = process.env.APP_URL || '' } = {}) {
   const db = openDatabase(filename);
   try { seedUsers(db, seedPassword, initialUsers); } catch (e) { db.close(); throw e; }
   const loginLimit = limiter(10, 15 * 60 * 1000), publicLimit = limiter(20, 60 * 60 * 1000), trackLimit = limiter(30, 60 * 60 * 1000);
   const dummyHash = hashPassword('Unused-Dummy-Password');
   const cookie = token => `changeflow_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${token ? 28800 : 0}${secureCookies ? '; Secure' : ''}`;
   const tx = work => transaction(db, work);
+  // ---------- GitHub: fuera de las transacciones (red) ----------
+  // Crea la issue del CRF; un fallo no impide registrar la solicitud y puede reintentarse desde el expediente.
+  async function openIssue(id) {
+    if (!github.canIssue()) return null;
+    const r = S.issueData(db, id);
+    if (r.github?.issue) return r;
+    const result = await github.createIssue(r, appUrl);
+    if (!result.ok) console.error(`GitHub: no se pudo crear la issue de ${id}: ${result.message}`);
+    return tx(() => S.recordIssue(db, id, result));
+  }
+  // Tras una acción con hitos (decisión, asignación, pruebas, cierre…) actualiza etiquetas y estado y comenta en la issue.
+  async function syncIssue(id, historyBefore, force = false) {
+    const r = S.issueData(db, id);
+    if (!github.canIssue() || !r.github?.issue) return r;
+    const comment = milestoneComment(r, historyBefore);
+    if (!comment && !force) return r;
+    const result = await github.syncIssue(r, { comment });
+    if (!result.ok) console.error(`GitHub: no se pudo sincronizar la issue de ${id}: ${result.message}`);
+    return tx(() => S.recordIssue(db, id, result));
+  }
   const server = http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'same-origin'); res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -78,13 +98,20 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
         if (attempt.blocked) fail(429, 'Has enviado demasiadas solicitudes. Intenta más tarde.');
         attempt.add();
         const data = await readJson(req, 8 * MB), { request, trackingToken } = tx(() => S.createRequest(db, null, data));
+        await openIssue(request.id);
         json(201, { receipt: { id: request.id, date: request.date, status: request.status, trackingToken } }); return;
       }
       if ((route === '/api/public/track' || route === '/api/public/track/clarification') && method === 'POST') {
         const attempt = trackLimit(ip);
         if (attempt.blocked) fail(429, 'Demasiadas consultas. Intenta más tarde.');
         const data = await readJson(req, route.endsWith('clarification') ? 8 * MB : 10 * KB);
-        try { json(200, { request: route.endsWith('clarification') ? tx(() => S.publicClarification(db, data)) : S.trackRequest(db, data) }); }
+        try {
+          if (route.endsWith('clarification')) {
+            const view = tx(() => S.publicClarification(db, data));
+            await syncIssue(view.id, Math.max(0, S.issueData(db, view.id).history.length - 1));
+            json(200, { request: view });
+          } else json(200, { request: S.trackRequest(db, data) });
+        }
         catch (e) { if (e.status === 404) attempt.add(); throw e; }
         return;
       }
@@ -99,16 +126,41 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
       if (route === '/api/users' && method === 'GET') { json(200, { users: user.role === 'usuario' ? [] : S.users(db).map(publicUser) }); return; }
       if (route === '/api/requests' && method === 'GET') { json(200, store()); return; }
       if (route === '/api/requests' && method === 'POST') {
-        const data = await readJson(req, 8 * MB), { request } = tx(() => S.createRequest(db, user, data)); json(201, { request, store: store() }); return;
+        const data = await readJson(req, 8 * MB), created = tx(() => S.createRequest(db, user, data));
+        const request = (await openIssue(created.request.id)) || created.request;
+        json(201, { request, store: store() }); return;
       }
       let m = /^\/api\/requests\/((?:CRF|SCR)-\d+)(?:\/([a-z-]+))?$/.exec(route);
       if (m) {
         const [, id, action] = m;
         if (!action && method === 'GET') { json(200, S.requestDetail(db, id, user)); return; }
         if (action === 'attachments' && method === 'POST') { const data = await readJson(req, 12 * MB); const r = tx(() => S.uploadAttachments(db, id, user, data)); json(200, { request: r, store: store() }); return; }
+        if (action === 'github-issue' && method === 'POST') {
+          if (user.role !== 'ccc') fail(403, 'Solo el CCC gestiona la issue de GitHub.');
+          await readJson(req, 10 * KB);
+          const current = S.requestDetail(db, id, user).request;
+          if (!github.canIssue()) fail(409, 'Configura GITHUB_REPO y GITHUB_TOKEN para crear issues.');
+          const r = current.github?.issue ? await syncIssue(current.id, current.history.length, true) : await openIssue(current.id);
+          if (!r.github?.lastSync?.ok) fail(502, `GitHub: ${r.github?.lastSync?.message || 'no se pudo completar la operación.'}`);
+          json(200, { request: r, store: store() }); return;
+        }
         if ((!action && ['PATCH', 'DELETE'].includes(method)) || (action && method === 'POST' && ACTIONS.includes(action))) {
           const data = await readJson(req), name = action || (method === 'DELETE' ? 'delete' : 'edit');
-          const r = tx(() => S.mutate(db, id, name, user, data)); json(200, { request: r, store: store() }); return;
+          delete data[S.GITHUB_RESULT];
+          // Las referencias Git se consultan en GitHub antes de la transacción; el resultado lo adjunta el servidor.
+          if (name === 'git') {
+            const { kind, value, url: link } = S.gitInput(data);
+            const result = await github.verify(kind, value, link);
+            if (result.status === 'no encontrada') fail(400, result.message, 'value');
+            if (result.status === 'otro repositorio') fail(400, result.message, 'url');
+            data[S.GITHUB_RESULT] = result;
+          } else if (name === 'git-refresh') {
+            const ref = S.findGitRef(db, id, user, data.refId);
+            data[S.GITHUB_RESULT] = await github.verify(ref.kind, ref.value, ref.url);
+          }
+          const before = name === 'delete' ? 0 : S.issueData(db, id).history.length;
+          const r = tx(() => S.mutate(db, id, name, user, data));
+          json(200, { request: r ? await syncIssue(r.id, before) : r, store: store() }); return;
         }
       }
       m = /^\/api\/attachments\/([a-f0-9]{24})$/.exec(route);
@@ -118,24 +170,9 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
         res.end(content); return;
       }
       if (user.role === 'usuario') fail(403, 'Esta sección está reservada al equipo técnico y al CCC.');
-      if (route === '/api/ics' && method === 'GET') { json(200, { items: I.listIcs(db), categories: I.categories(db) }); return; }
-      if (route === '/api/ics' && method === 'POST') { const data = await readJson(req); const ics = tx(() => I.createIcs(db, user, data)); json(201, { ics, items: I.listIcs(db) }); return; }
-      if (route === '/api/ics-categories' && method === 'POST') { const data = await readJson(req); json(201, { categories: tx(() => I.addCategory(db, user, data)) }); return; }
-      m = /^\/api\/ics\/(ICS-[A-Z]+-\d+)(?:\/(revisions|relations)(?:\/(\d+))?)?$/.exec(route);
-      if (m) {
-        const [, code, sub, relId] = m;
-        if (!sub && method === 'GET') { json(200, I.icsDetail(db, code, user)); return; }
-        if (!sub && method === 'PATCH') { const data = await readJson(req); tx(() => I.updateIcs(db, user, code, data)); json(200, I.icsDetail(db, code, user)); return; }
-        if (sub === 'revisions' && method === 'POST') { const data = await readJson(req); tx(() => I.addRevision(db, user, code, data)); json(200, I.icsDetail(db, code, user)); return; }
-        if (sub === 'relations' && method === 'POST' && !relId) { const data = await readJson(req); json(200, tx(() => I.addRelation(db, user, code, data))); return; }
-        if (sub === 'relations' && method === 'DELETE' && relId) { json(200, tx(() => I.removeRelation(db, user, code, relId))); return; }
-      }
-      if (route === '/api/baselines' && method === 'GET') { json(200, { baselines: I.listBaselines(db) }); return; }
-      if (route === '/api/baselines' && method === 'POST') { const data = await readJson(req); const code = tx(() => I.createBaseline(db, user, data)); json(201, { code, baselines: I.listBaselines(db) }); return; }
-      m = /^\/api\/baselines\/(LB-[A-Z]+-\d+)\/(items|submit|decide|delete)$/.exec(route);
-      if (m && method === 'POST') { const data = await readJson(req); json(200, { baselines: tx(() => I.baselineAction(db, user, m[1], m[2], data)) }); return; }
+      if (route === '/api/github/status' && method === 'GET') { json(200, await github.status()); return; }
       if ((route === '/api/reports' || route === '/api/reports.csv') && method === 'GET') {
-        const filters = Object.fromEntries([...url.searchParams].filter(([k, v]) => ['from', 'to', 'status', 'itilType', 'requester', 'developer', 'ics', 'module', 'priority', 'result'].includes(k) && v).map(([k, v]) => [k, v.slice(0, 200)]));
+        const filters = Object.fromEntries([...url.searchParams].filter(([k, v]) => ['from', 'to', 'status', 'itilType', 'requester', 'developer', 'module', 'priority', 'result'].includes(k) && v).map(([k, v]) => [k, v.slice(0, 200)]));
         const data = R.report(db, user, filters);
         if (route.endsWith('.csv')) { res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="reporte-cambios.csv"', 'Cache-Control': 'no-store' }); res.end(R.csv(data.rows)); return; }
         json(200, data); return;

@@ -10,6 +10,8 @@ const files = require('./files.cjs');
 // `field` identifica el campo con error para que el cliente lo marque en rojo.
 class HttpError extends Error { constructor(status, message, field) { super(message); this.status = status; if (field) this.field = field; } }
 const fail = (status, message, field) => { throw new HttpError(status, message, field); };
+// Solo el servidor puede adjuntar el resultado de GitHub: un símbolo no puede llegar en un JSON del cliente.
+const GITHUB_RESULT = Symbol.for('changeflow.github');
 const now = () => new Date().toISOString();
 const localDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Guayaquil', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const digest = v => createHash('sha256').update(v).digest('hex');
@@ -116,35 +118,34 @@ function log(db, r, user, action, note, extra = {}) {
 }
 function notify(r, message) { (r.notices ||= []).push({ at: now(), to: r.email, message, channel: 'Expediente y seguimiento (sin correo automático)' }); }
 
-// ---------- Relaciones CRF-ICS ----------
-function icsById(db, id) { return db.prepare('SELECT id,code,name,status,current_revision_id FROM ics WHERE id=?').get(id); }
-function validIcs(db, ids, label) {
-  if (!Array.isArray(ids)) fail(400, `${label}: selección inválida.`);
-  const unique = [...new Set(ids.map(Number))];
-  if (unique.length > 50 || unique.some(x => !Number.isInteger(x))) fail(400, `${label}: selección inválida.`);
-  return unique.map(id => {
-    const ics = icsById(db, id);
-    if (!ics) fail(400, `${label}: el ICS seleccionado no existe.`);
-    if (ics.status === 'Retirado') fail(400, `${label}: ${ics.code} está retirado.`);
-    return ics;
-  });
+// ---------- Módulos afectados ----------
+// Una solicitud puede afectar varios módulos del catálogo. `module` conserva el primero por compatibilidad.
+const modulesOf = r => r.modules?.length ? r.modules : r.module ? [r.module] : [];
+function parseModules(data, { field = 'modules', label = 'Módulos afectados', allowUnsure = true } = {}) {
+  let v = data[field];
+  if ((v === undefined || v === null || v === '') && field === 'modules' && data.module) v = [data.module];
+  if (typeof v === 'string') v = [v];
+  if (!Array.isArray(v) || v.some(x => typeof x !== 'string')) fail(400, `${label}: selección inválida.`, field);
+  const out = [...new Set(v)];
+  if (!out.length) fail(400, `${label}: selecciona al menos un módulo.`, field);
+  for (const m of out) if (!C.MODULES.includes(m) || (!allowUnsure && m === 'No estoy seguro')) fail(400, `${label}: «${m}» no es un módulo válido.`, field);
+  if (out.includes('No estoy seguro') && out.length > 1) fail(400, `${label}: no combines «No estoy seguro» con otros módulos.`, field);
+  return out;
 }
-function links(db, number) {
-  return db.prepare(`SELECT ri.id,ri.kind,ri.operation,ri.from_revision AS fromRevision,ri.to_revision AS toRevision,ri.revision_id AS revisionId,ri.description,ri.evidence,
-    ri.in_scope AS inScope,ri.active,ri.decision_n AS decisionN,ri.round,ri.created_at AS createdAt,i.id AS icsId,i.code,i.name,i.status AS icsStatus
-    FROM request_ics ri JOIN ics i ON i.id=ri.ics_id WHERE ri.request_id=? ORDER BY ri.id`).all(number);
-}
-const authorizedLinks = (db, number) => links(db, number).filter(l => l.kind === 'autorizado' && l.active);
-function insertLink(db, number, icsId, kind, user, extra = {}) {
-  db.prepare(`INSERT INTO request_ics(request_id,ics_id,kind,operation,from_revision,to_revision,revision_id,description,evidence,in_scope,active,decision_n,round,created_by,created_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)`).run(number, icsId, kind, extra.operation ?? null, extra.fromRevision ?? null, extra.toRevision ?? null, extra.revisionId ?? null,
-    extra.description ?? '', extra.evidence ?? '', extra.inScope ?? null, extra.decisionN ?? null, extra.round ?? null, user?.id ?? null, now());
+// Módulos autorizados vigentes: los de la decisión vigente más las ampliaciones de alcance aprobadas después.
+function authorizedModules(r) {
+  const auth = currentAuthorization(r);
+  if (!auth || !['Aprobado', 'Aprobado con condiciones'].includes(auth.decision)) return [];
+  const list = (auth.authorizedModules || []).map(x => x.module);
+  for (const d of r.decisions || []) if (d.kind === 'Ampliación de alcance' && d.n > auth.n && d.decision === 'Aprobado' && d.module) list.push(d.module);
+  return [...new Set(list)];
 }
 
 // ---------- CRF ----------
 function requestFields(db, data, kind, date) {
   const f = { project: C.PROJECT };
-  f.module = pick(data.module, C.MODULES, 'un módulo afectado', { field: 'module' });
+  f.modules = parseModules(data);
+  f.module = f.modules[0];
   f.title = str(data, 'title', { required: true, max: 120, min: 5, label: 'Título' });
   f.currentBehavior = str(data, 'currentBehavior', { required: true, label: 'Situación o comportamiento actual' });
   f.featureMissing = bool(data.featureMissing);
@@ -153,7 +154,6 @@ function requestFields(db, data, kind, date) {
   f.result = str(data, 'result', { required: true, label: 'Resultado esperado' });
   f.desiredDate = isoDate(str(data, 'desiredDate', { max: 10, label: 'Fecha deseada' }), 'Fecha deseada', date, 'desiredDate');
   f.observations = str(data, 'observations', { label: 'Observaciones' });
-  let suggested = [];
   if (kind === 'experto') {
     f.modificationType = pick(data.modificationType, C.OPERATIONS, 'un tipo de modificación', { field: 'modificationType' });
     f.environment = pick(data.environment, C.ENVIRONMENTS, 'un entorno afectado', { field: 'environment' });
@@ -166,15 +166,13 @@ function requestFields(db, data, kind, date) {
     f.businessRulesAffected = bool(data.businessRulesAffected);
     f.businessRules = f.businessRulesAffected ? str(data, 'businessRules', { required: true, max: 2000, label: 'Reglas de negocio afectadas' }) : 'No aplica';
     f.acceptanceCriteria = list(data, 'acceptanceCriteria', { required: true, label: 'Criterios de aceptación' });
-    f.suggestedIcsText = str(data, 'suggestedIcsText', { max: 1000, label: 'ICS sugeridos no catalogados' });
+    f.components = str(data, 'components', { max: 1000, label: 'Componentes técnicos afectados' });
     f.proposedPriority = pick(data.proposedPriority || 'Media', C.LEVELS, 'una prioridad propuesta', { field: 'proposedPriority' });
-    suggested = validIcs(db, data.suggestedIcs || [], 'Componentes potencialmente afectados');
-    if (!suggested.length && !f.suggestedIcsText) fail(400, 'Componentes potencialmente afectados: selecciona al menos un ICS del catálogo o sugiere uno nuevo.', 'suggestedIcs');
   }
-  return { fields: f, suggested };
+  return { fields: f };
 }
 function blankRequest() {
-  return { infoRequests: [], evaluation: null, previousEvaluations: [], decisions: [], assignments: [], implementation: { rounds: [] }, gitRefs: [], deviations: [], tests: [], testRounds: [], reviews: [], backouts: [], closure: null, closures: [], reopenings: [], notices: [], flags: [] };
+  return { infoRequests: [], evaluation: null, previousEvaluations: [], decisions: [], assignments: [], implementation: { rounds: [] }, gitRefs: [], changes: [], deviations: [], tests: [], testRounds: [], reviews: [], backouts: [], closure: null, closures: [], reopenings: [], notices: [], flags: [] };
 }
 function createRequest(db, user, data) {
   const guest = !user;
@@ -188,24 +186,23 @@ function createRequest(db, user, data) {
   const kind = user.role;
   if (data.requesterType !== kind) fail(403, 'El tipo de solicitud no corresponde a tu perfil.');
   const date = localDate();
-  const { fields, suggested } = requestFields(db, data, kind, date);
+  const { fields } = requestFields(db, data, kind, date);
   const inserted = db.prepare('INSERT INTO requests(owner_id,document) VALUES(?,?)').run(user.id, '{}');
   const number = Number(inserted.lastInsertRowid);
   let trackingToken = null;
   const r = { schema: SCHEMA, ...fields, id: crfCode(number), date, createdAt: now(), name: user.name, email: user.email, ownerId: user.id, requesterType: kind, priority: null, status: 'Registrada', revision: 0, history: [], ...blankRequest() };
   if (guest) { trackingToken = randomBytes(18).toString('hex'); r.submittedWithoutAccount = true; r.trackingHash = digest(trackingToken); }
-  for (const ics of suggested) insertLink(db, number, ics.id, 'sugerido', user);
   r.history.push({ status: 'Registrada', from: null, date: r.createdAt, responsible: nameOf(user), responsibleId: user.id, action: 'Creación de CRF', note: `CRF ${kind === 'experto' ? 'técnico' : 'de usuario final'} registrado.` });
-  audit(db, { entityType: 'CRF', entityId: r.id, action: 'Creación de CRF', actor: user, to: 'Registrada', justification: `${r.title}${suggested.length ? ` · ICS sugeridos: ${suggested.map(i => i.code).join(', ')}` : ''}` });
+  audit(db, { entityType: 'CRF', entityId: r.id, action: 'Creación de CRF', actor: user, to: 'Registrada', justification: `${r.title} · Módulos: ${r.modules.join(', ')}` });
   files.storeFiles(db, { requestNumber: number, requestCode: r.id, context: 'Solicitud', files: data.files, user, fail });
   save(db, r);
-  return { request: present(db, number, r), trackingToken };
+  return { request: present(r), trackingToken };
 }
 
 // ---------- Ficha del CCC ----------
 const EVAL_TEXT = {
   classificationJustification: 'Justificación de la clasificación', standardReference: 'Procedimiento estándar de referencia', plannedChanges: 'Conjunto de modificaciones previstas',
-  icsNote: 'Situación de los ICS no identificados', technicalImpact: 'Impacto técnico previsto', functionalImpact: 'Impacto funcional u operativo',
+  technicalImpact: 'Impacto técnico previsto', functionalImpact: 'Impacto funcional u operativo',
   feasibilityJustification: 'Justificación de viabilidad', resources: 'Recursos necesarios', considerations: 'Consideraciones adicionales',
   rolloutObjective: 'Objetivo de la implementación', rolloutDependencies: 'Dependencias', rolloutResponsibles: 'Responsables previstos', rolloutChecks: 'Verificaciones iniciales', rolloutCompletion: 'Condiciones de implementación completada',
   backoutTriggers: 'Condiciones que activan la reversión', backoutVersion: 'Versión o configuración a recuperar', backoutData: 'Precauciones sobre los datos', backoutResponsible: 'Responsable de la reversión', backoutVerification: 'Verificación posterior a la reversión', backoutAlternative: 'Estrategia de recuperación o mitigación',
@@ -215,7 +212,7 @@ const EVAL_TEXT = {
 const EVAL_LIST = { risks: 'Riesgos identificados', rolloutSteps: 'Actividades del rollout (en orden)', backoutActions: 'Acciones de reversión', testCriteria: 'Criterios de aceptación para pruebas' };
 const EVAL_ENUM = { itilType: [Object.keys(C.ITIL), 'un tipo de cambio ITIL'], impact: [C.IMPACT, 'un impacto'], urgency: [C.LEVELS, 'una urgencia'], priority: [C.LEVELS, 'una prioridad'], feasibility: [C.FEASIBILITY, 'una viabilidad'], downtimeUnit: [C.DOWNTIME_UNITS, 'una unidad de inactividad'] };
 const EVAL_NUM = { effortHours: 'Esfuerzo estimado (horas-persona)', durationDays: 'Duración estimada (días calendario)', downtimeValue: 'Tiempo de inactividad previsto' };
-const EVAL_KEYS = [...Object.keys(EVAL_TEXT), ...Object.keys(EVAL_LIST), ...Object.keys(EVAL_ENUM), ...Object.keys(EVAL_NUM), 'standardSameConditions'];
+const EVAL_KEYS = [...Object.keys(EVAL_TEXT), ...Object.keys(EVAL_LIST), ...Object.keys(EVAL_ENUM), ...Object.keys(EVAL_NUM), 'standardSameConditions', 'affectedModules'];
 function parseEvaluation(db, data, r) {
   const e = {};
   for (const [k, label] of Object.entries(EVAL_TEXT)) e[k] = str(data, k, { max: ['targetVersion', 'plannedDate'].includes(k) ? 40 : 5000, label });
@@ -226,18 +223,18 @@ function parseEvaluation(db, data, r) {
   if (e.plannedDate && (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(e.plannedDate) || Number.isNaN(Date.parse(e.plannedDate)))) fail(400, 'Fecha prevista de implementación: fecha inválida.', 'plannedDate');
   version(e.targetVersion, 'Versión objetivo', 'targetVersion', { allow: ['Pendiente'], greaterThan: r?.currentVersion });
   if (e.standardReference) e.standardReference = e.standardReference.toUpperCase();
-  const raw = Array.isArray(data.potentialIcs) ? data.potentialIcs : [];
-  if (raw.length > 50) fail(400, 'ICS potencialmente afectados: demasiados elementos.');
-  const potential = raw.map(x => ({ ics: validIcs(db, [x?.icsId], 'ICS potencialmente afectados')[0], operation: pick(x?.operation || 'Modificación', C.OPERATIONS, 'una operación prevista') }));
-  if (new Set(potential.map(p => p.ics.id)).size !== potential.length) fail(400, 'ICS potencialmente afectados: hay elementos repetidos.');
-  return { e, potential };
+  // Módulos confirmados por el CCC, cada uno con la operación prevista.
+  const raw = Array.isArray(data.affectedModules) ? data.affectedModules : [];
+  const names = raw.length ? parseModules({ affectedModules: raw.map(x => x?.module) }, { field: 'affectedModules', label: 'Módulos afectados', allowUnsure: false }) : [];
+  e.affectedModules = names.map(module => ({ module, operation: pick(raw.find(x => x?.module === module)?.operation || 'Modificación', C.OPERATIONS, 'una operación prevista', { field: 'affectedModules' }) }));
+  return { e };
 }
-function missingAnalysis(e, potentialCount) {
+function missingAnalysis(e) {
   const m = [];
   const need = (ok, label) => { if (!ok) m.push(label); };
   need(e.itilType, 'Tipo de cambio ITIL');
   need(e.classificationJustification, EVAL_TEXT.classificationJustification);
-  need(potentialCount || e.icsNote, 'ICS potencialmente afectados o justificación de su ausencia');
+  need(e.affectedModules?.length, 'Módulos afectados confirmados por el CCC');
   need(e.plannedChanges, EVAL_TEXT.plannedChanges);
   for (const k of ['impact', 'urgency', 'priority', 'feasibility']) need(e[k], { impact: 'Impacto estimado', urgency: 'Urgencia', priority: 'Prioridad', feasibility: 'Viabilidad técnica' }[k]);
   for (const k of ['technicalImpact', 'functionalImpact', 'feasibilityJustification', 'resources']) need(e[k], EVAL_TEXT[k]);
@@ -291,28 +288,18 @@ function requestInfo(db, r, user, missing, decisionRecord) {
   notify(r, `El CCC solicita información adicional: ${missing}`);
   transition(db, r, user, 'Pendiente de información', 'Solicitud de información adicional', missing);
 }
-function syncPotential(db, r, number, potential, user) {
-  const before = links(db, number).filter(l => l.kind === 'potencial');
-  const key = l => `${l.code}:${l.operation}`;
-  const after = potential.map(p => ({ code: p.ics.code, operation: p.operation }));
-  if (JSON.stringify(before.map(key)) === JSON.stringify(after.map(key))) return;
-  db.prepare("DELETE FROM request_ics WHERE request_id=? AND kind='potencial'").run(number);
-  for (const p of potential) insertLink(db, number, p.ics.id, 'potencial', user, { operation: p.operation });
-  audit(db, { entityType: 'CRF', entityId: r.id, action: 'Cambio de ICS afectados', actor: user, from: r.status, to: r.status, field: 'ICS potencialmente afectados', oldValue: before.map(key).join(', ') || '—', newValue: after.map(key).join(', ') || '—' });
-}
 function evaluationAction(db, r, number, user, data) {
   requireCCC(r, user);
   requireState(r, ['En análisis', 'En planificación', 'Pendiente de aprobación']);
   const step = pick(data.step || 'draft', ['draft', 'analysis', 'planning'], 'una acción de la ficha', { field: 'step' });
-  const { e, potential } = parseEvaluation(db, data, r);
+  const { e } = parseEvaluation(db, data, r);
   const before = r.evaluation || {};
   r.evaluation = { ...before, ...e, member: before.member || user.name, memberId: before.memberId || user.id, startedAt: before.startedAt || now(), updatedAt: now(), migrated: undefined };
   const changed = EVAL_KEYS.some(k => JSON.stringify(before[k] ?? null) !== JSON.stringify(e[k] ?? null));
   auditChanges(db, { entityType: 'CRF', entityId: r.id, action: 'Modificación de la ficha del CCC', actor: user, from: r.status, to: r.status }, before, e, EVAL_KEYS);
-  syncPotential(db, r, number, potential, user);
   if (changed && r.status === 'Pendiente de aprobación') transition(db, r, user, 'En planificación', 'Modificación de la ficha', 'La ficha cambió después de completar la planificación; debe completarse nuevamente antes de decidir.');
   if (step === 'draft') { log(db, r, user, 'Guardado de borrador', 'Ficha del CCC guardada como borrador.'); return; }
-  const missingA = missingAnalysis(r.evaluation, potential.length);
+  const missingA = missingAnalysis(r.evaluation);
   if (missingA.length) fail(400, `Para completar el análisis falta: ${missingA.join('; ')}.`);
   const reference = checkStandardReference(db, r.evaluation);
   if (r.evaluation.itilType === 'Emergencia' && r.evaluation.classificationJustification.length < 30) fail(400, 'Un cambio de emergencia requiere explicar en al menos 30 caracteres la situación que exige el procedimiento acelerado.', 'classificationJustification');
@@ -341,7 +328,7 @@ function decisionAction(db, r, number, user, data) {
   requireCCC(r, user);
   const decision = pick(data.decision, C.DECISIONS, 'una decisión', { field: 'decision' });
   const justification = str(data, 'justification', { required: true, min: 10, max: 5000, label: 'Justificación de la decisión' });
-  const base = { n: r.decisions.length + 1, kind: 'Autorización', decision, justification, conditions: [], decidedBy: user.name, decidedById: user.id, at: now(), itilType: r.evaluation?.itilType || '', evaluationSnapshot: r.evaluation ? { ...r.evaluation, potentialIcs: links(db, number).filter(l => l.kind === 'potencial').map(l => `${l.code} (${l.operation})`) } : null };
+  const base = { n: r.decisions.length + 1, kind: 'Autorización', decision, justification, conditions: [], decidedBy: user.name, decidedById: user.id, at: now(), itilType: r.evaluation?.itilType || '', evaluationSnapshot: r.evaluation ? { ...r.evaluation } : null };
   if (decision === 'Más información') {
     requireState(r, ['En validación', 'En análisis', 'En planificación', 'Pendiente de aprobación']);
     requestInfo(db, r, user, justification, base);
@@ -355,8 +342,8 @@ function decisionAction(db, r, number, user, data) {
     return;
   }
   requireState(r, ['Pendiente de aprobación']);
-  const e = r.evaluation || {}, potentialCount = links(db, number).filter(l => l.kind === 'potencial').length;
-  const missing = [...missingAnalysis(e, potentialCount), ...missingPlanning(e)];
+  const e = r.evaluation || {};
+  const missing = [...missingAnalysis(e), ...missingPlanning(e)];
   if (missing.length) fail(409, `No se puede aprobar: falta ${missing.join('; ')}.`);
   // Un cambio marcado como no viable no se aprueba: se corrige el análisis o se rechaza.
   if (e.feasibility === 'No viable') fail(409, 'No se puede aprobar un cambio con viabilidad técnica «No viable». Corrige el análisis (sección B) o rechaza la solicitud.', 'decision');
@@ -365,15 +352,14 @@ function decisionAction(db, r, number, user, data) {
     if (!base.conditions.length) fail(400, 'Una aprobación condicionada requiere al menos una condición con su forma de verificación.');
   } else if (Array.isArray(data.conditions) && data.conditions.length) fail(400, 'Una aprobación sin restricciones no admite condiciones; usa «Aprobado con condiciones».');
   base.preauthorizedBy = e.itilType === 'Estándar' && e.standardReference ? e.standardReference : null;
+  base.authorizedModules = (e.affectedModules || []).map(x => ({ ...x }));
   r.decisions.push(base);
-  for (const l of links(db, number).filter(l => l.kind === 'potencial')) insertLink(db, number, l.icsId, 'autorizado', user, { operation: l.operation, decisionN: base.n });
   notify(r, `Solicitud ${decision === 'Aprobado' ? 'aprobada' : 'aprobada con condiciones'} por el CCC. La aprobación no implica que el cambio ya esté implementado.`);
-  transition(db, r, user, C.DECISION_STATUS[decision], decision === 'Aprobado' ? 'Aprobación' : 'Aprobación condicionada', `${justification}${base.conditions.length ? ` · Condiciones: ${base.conditions.map(c => c.text).join(' | ')}` : ''}${base.feasibilityException ? ` · Excepción de viabilidad: ${base.feasibilityException}` : ''}`);
+  transition(db, r, user, C.DECISION_STATUS[decision], decision === 'Aprobado' ? 'Aprobación' : 'Aprobación condicionada', `${justification}${base.conditions.length ? ` · Condiciones: ${base.conditions.map(c => c.text).join(' | ')}` : ''} · Módulos autorizados: ${base.authorizedModules.map(x => x.module).join(', ')}`);
 }
 function supersede(db, r, number, user, reason) {
   const auth = currentAuthorization(r);
   if (auth) Object.assign(auth, { superseded: true, supersededAt: now(), supersededBy: user.name, supersededReason: reason });
-  db.prepare("UPDATE request_ics SET active=0 WHERE request_id=? AND kind='autorizado'").run(number);
   const a = currentAssignment(r);
   if (a) Object.assign(a, { releasedAt: now(), releasedReason: reason });
 }
@@ -420,45 +406,54 @@ function activityAction(db, r, user, data) {
 function gitAction(db, r, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación', 'En pruebas', 'En revisión', 'Correcciones requeridas']);
+  const { kind, value, url } = gitInput(data);
+  const v = data[GITHUB_RESULT] || null;
+  const ref = { id: nextId(r.gitRefs, 'GIT'), kind, value, url: url || v?.details?.url || '', note: str(data, 'note', { max: 1000 }), by: user.name, at: now(), verified: v?.ok === true, verification: v };
+  r.gitRefs.push(ref);
+  log(db, r, user, 'Registro de evidencia', `${kind}: ${value}${ref.url ? ` (${ref.url})` : ''}. ${ref.verified ? `Verificado en GitHub${v.details?.state ? ` (${v.details.state})` : ''}.` : v?.message || 'Sin verificación en GitHub.'}`);
+}
+// Validación de la referencia antes de consultarla en GitHub (también la usa el servidor).
+function gitInput(data) {
   const kind = pick(data.kind, C.GIT_KINDS, 'un tipo de referencia', { field: 'kind' });
   const value = str(data, 'value', { required: true, max: 300, label: 'Referencia' });
   const url = link(str(data, 'url', { max: 500, label: 'Enlace' }), 'Enlace');
-  if (kind === 'Commit' && !/^[0-9a-f]{7,40}$/i.test(value)) fail(400, 'Commit: indica el identificador SHA (7 a 40 caracteres hexadecimales).');
-  if (kind === 'Pull request' && url && /github\.com$/i.test(new URL(url).hostname) && !/\/pull\/\d+/.test(new URL(url).pathname)) fail(400, 'Pull request: la URL de GitHub debe tener la forma …/pull/número.');
-  if (['Repositorio', 'Pull request', 'Enlace de evidencia'].includes(kind) && !url) fail(400, `${kind}: indica la URL.`);
-  const ref = { id: nextId(r.gitRefs, 'GIT'), kind, value, url, note: str(data, 'note', { max: 1000 }), by: user.name, at: now(), verified: false };
-  r.gitRefs.push(ref);
-  log(db, r, user, 'Registro de evidencia', `${kind}: ${value}${url ? ` (${url})` : ''}. Registrado manualmente; el sistema no verificó el repositorio.`);
+  if (kind === 'Commit' && !/^[0-9a-f]{7,40}$/i.test(value)) fail(400, 'Commit: indica el identificador SHA (7 a 40 caracteres hexadecimales).', 'value');
+  if (kind === 'Pull request' && !/^#?\d+$/.test(value) && !(url && /\/pull\/\d+/.test(new URL(url).pathname))) fail(400, 'Pull request: indica el número (#42) o la URL …/pull/42.', 'value');
+  if (kind === 'Rama' && !/^[\w.\/-]{1,200}$/.test(value)) fail(400, 'Rama: nombre inválido.', 'value');
+  if (kind === 'Enlace de evidencia' && !url) fail(400, 'Enlace de evidencia: indica la URL.', 'url');
+  return { kind, value, url };
 }
-function icsChangeAction(db, r, number, user, data) {
+function gitRefreshAction(db, r, user, data) {
+  if (!isDev(user) && !isCCC(user)) fail(403, 'No puedes verificar referencias.');
+  const ref = r.gitRefs.find(g => g.id === data.refId);
+  if (!ref) fail(404, 'Referencia no encontrada.');
+  const v = data[GITHUB_RESULT];
+  if (!v) fail(409, 'No se pudo consultar GitHub.');
+  const before = ref.verification?.details?.state || (ref.verified ? 'verificada' : 'sin verificar');
+  Object.assign(ref, { verified: v.ok === true, verification: v });
+  log(db, r, user, 'Verificación de referencia', `${ref.id} ${ref.kind} ${ref.value}: ${v.ok ? `verificada${v.details?.state ? ` (${v.details.state})` : ''}` : v.message}.`, { field: ref.id, oldValue: before, newValue: v.details?.state || v.status });
+}
+function moduleChangeAction(db, r, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación']);
-  const ics = validIcs(db, [data.icsId], 'ICS modificado')[0];
-  const operation = pick(data.operation, C.OPERATIONS, 'un tipo de operación', { field: 'operation' });
-  const toRevision = str(data, 'toRevision', { required: true, max: 60, label: 'Revisión nueva' });
-  const description = str(data, 'description', { required: true, min: 5, max: 3000, label: 'Descripción de la modificación' });
-  const evidence = str(data, 'evidence', { max: 1000, label: 'Evidencia asociada' });
-  const current = ics.current_revision_id ? db.prepare('SELECT revision FROM ics_revisions WHERE id=?').get(ics.current_revision_id)?.revision : null;
-  const busy = db.prepare("SELECT request_id FROM ics_revisions WHERE ics_id=? AND status='En cambio'").get(ics.id);
-  if (busy) fail(409, `${ics.code} ya tiene una revisión en curso (${crfCode(busy.request_id)}).`);
-  if (db.prepare('SELECT 1 FROM ics_revisions WHERE ics_id=? AND revision=?').get(ics.id, toRevision)) fail(409, `La revisión ${toRevision} de ${ics.code} ya existe.`);
-  const revisionId = Number(db.prepare("INSERT INTO ics_revisions(ics_id,revision,git_ref,date,notes,request_id,status,created_by) VALUES(?,?,?,?,?,?,'En cambio',?)").run(ics.id, toRevision, str(data, 'gitRef', { max: 200 }), now(), description, number, user.id).lastInsertRowid);
-  const authorized = authorizedLinks(db, number).some(l => l.icsId === ics.id);
-  insertLink(db, number, ics.id, 'modificado', user, { operation, fromRevision: current || 'Sin revisión', toRevision, revisionId, description, evidence, inScope: authorized ? 1 : 0, round: currentRound(r).n });
-  if (!authorized) {
-    r.deviations.push({ id: nextId(r.deviations, 'DES'), icsId: ics.id, icsCode: ics.code, description: `Modificación de ${ics.code} fuera de los ICS autorizados: ${description}`, status: 'Pendiente', by: user.name, at: now() });
-    log(db, r, user, 'Desviación de alcance', `${ics.code} no estaba autorizado. Requiere decisión del CCC antes de continuar.`);
+  const [module] = parseModules({ module: data.module }, { field: 'module', label: 'Módulo modificado', allowUnsure: false });
+  const change = { id: nextId(r.changes, 'MOD'), round: currentRound(r).n, module, operation: pick(data.operation, C.OPERATIONS, 'un tipo de operación', { field: 'operation' }), description: str(data, 'description', { required: true, min: 5, max: 3000, label: 'Descripción de la modificación' }), evidence: str(data, 'evidence', { max: 1000, label: 'Evidencia asociada' }), by: user.name, at: now() };
+  change.inScope = authorizedModules(r).includes(module);
+  (r.changes ||= []).push(change);
+  if (!change.inScope) {
+    r.deviations.push({ id: nextId(r.deviations, 'DES'), module, description: `Modificación de «${module}» fuera de los módulos autorizados: ${change.description}`, status: 'Pendiente', by: user.name, at: now() });
+    log(db, r, user, 'Desviación de alcance', `«${module}» no estaba autorizado. Requiere decisión del CCC antes de continuar.`);
   }
-  log(db, r, user, 'Registro de ICS modificado', `${ics.code} ${operation}: ${current || 'sin revisión'} → ${toRevision}.`, { field: ics.code, oldValue: current, newValue: toRevision });
+  log(db, r, user, 'Registro de módulo modificado', `${change.id} ${module} · ${change.operation}: ${change.description}`, { field: module, newValue: change.operation });
 }
 function deviationAction(db, r, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación', 'En pruebas', 'Correcciones requeridas']);
   const description = str(data, 'description', { required: true, min: 10, max: 3000, label: 'Descripción de la desviación' });
-  r.deviations.push({ id: nextId(r.deviations, 'DES'), icsId: null, icsCode: null, description, status: 'Pendiente', by: user.name, at: now() });
+  r.deviations.push({ id: nextId(r.deviations, 'DES'), module: null, description, status: 'Pendiente', by: user.name, at: now() });
   log(db, r, user, 'Desviación de alcance', description);
 }
-function scopeAction(db, r, number, user, data) {
+function scopeAction(db, r, user, data) {
   requireCCC(r, user);
   requireState(r, ['En implementación', 'En pruebas', 'En revisión', 'Correcciones requeridas']);
   const d = r.deviations.find(x => x.id === data.deviationId);
@@ -466,20 +461,17 @@ function scopeAction(db, r, number, user, data) {
   const decision = pick(data.decision, ['Autorizada', 'No autorizada'], 'una decisión de alcance', { field: 'decision' });
   const justification = str(data, 'justification', { required: true, min: 10, max: 3000, label: 'Justificación' });
   Object.assign(d, { status: decision, decidedBy: user.name, decidedAt: now(), justification });
-  const record = { n: r.decisions.length + 1, kind: 'Ampliación de alcance', decision: decision === 'Autorizada' ? 'Aprobado' : 'Rechazado', justification, deviationId: d.id, conditions: [], decidedBy: user.name, decidedById: user.id, at: now() };
+  const record = { n: r.decisions.length + 1, kind: 'Ampliación de alcance', decision: decision === 'Autorizada' ? 'Aprobado' : 'Rechazado', justification, deviationId: d.id, module: d.module || null, conditions: [], decidedBy: user.name, decidedById: user.id, at: now() };
   r.decisions.push(record);
-  if (decision === 'Autorizada' && d.icsId) {
-    insertLink(db, number, d.icsId, 'autorizado', user, { operation: 'Modificación', decisionN: record.n });
-    db.prepare("UPDATE request_ics SET in_scope=1 WHERE request_id=? AND ics_id=? AND kind='modificado'").run(number, d.icsId);
-  }
+  if (decision === 'Autorizada' && d.module) for (const c of r.changes || []) if (c.module === d.module) c.inScope = true;
   log(db, r, user, 'Decisión de alcance', `${d.id} ${decision.toLowerCase()}: ${justification}`);
 }
-function sendToTests(db, r, number, user, data) {
+function sendToTests(db, r, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación']);
   const round = currentRound(r);
   if (!round.activities.length) fail(409, 'Registra al menos una actividad de implementación en esta ronda.');
-  if (!links(db, number).some(l => l.kind === 'modificado')) fail(409, 'Identifica los ICS realmente modificados antes de enviar a pruebas.');
+  if (!(r.changes || []).length) fail(409, 'Registra los módulos realmente modificados antes de enviar a pruebas.');
   if (r.deviations.some(d => d.status === 'Pendiente')) fail(409, 'Hay desviaciones de alcance pendientes de decisión del CCC.');
   round.sentToTestsAt = now();
   transition(db, r, user, 'En pruebas', 'Envío a pruebas', str(data, 'note', { max: 2000 }) || `Ronda ${round.n} lista para pruebas.`);
@@ -530,7 +522,7 @@ function backoutAction(db, r, user, data) {
   log(db, r, user, 'Ejecución de backout', `${b.id}: ${b.result}. Recuperado: ${b.recovered}. El sistema solo documenta la reversión; no restaura código ni datos.`);
 }
 function reviewCriteria(r) { return [...new Set([...(r.acceptanceCriteria || []), ...(r.evaluation?.testCriteria || [])])]; }
-function reviewAction(db, r, number, user, data) {
+function reviewAction(db, r, user, data) {
   if (!isDev(user)) fail(403, 'La revisión postimplementación la registra un desarrollador.');
   requireState(r, ['En revisión']);
   const criteria = reviewCriteria(r), auth = currentAuthorization(r);
@@ -541,7 +533,7 @@ function reviewAction(db, r, number, user, data) {
   const conditions = (auth?.conditions || []).map(c => { const x = rawConditions.find(y => y?.id === c.id) || {}; return { id: c.id, text: c.text, verification: c.verification, met: bool(x.met), evidence: str(x, 'evidence', { max: 1000 }) }; });
   const decision = pick(data.decision, C.REVIEW_DECISIONS, 'una decisión de revisión', { field: 'decision' });
   const lastTests = r.testRounds.at(-1);
-  const review = { n: r.reviews.length + 1, round: currentRound(r).n, reviewer: user.name, reviewerId: user.id, independent: currentAssignment(r)?.developerId !== user.id, at: now(), summary: str(data, 'summary', { required: true, min: 10, max: 3000, label: 'Resumen de implementación' }), testResult: lastTests?.outcome || 'Sin pruebas', criteria: criteriaResult, rolloutCompliance: pick(data.rolloutCompliance, C.ROLLOUT_COMPLIANCE, 'el cumplimiento del rollout', { field: 'rolloutCompliance' }), conditions, modifiedIcs: links(db, number).filter(l => l.kind === 'modificado').map(l => `${l.code} ${l.fromRevision}→${l.toRevision}${l.inScope ? '' : ' (fuera de alcance)'}`), deviationsFound: str(data, 'deviationsFound', { max: 3000 }), pendingIssues: str(data, 'pendingIssues', { max: 3000 }), recommendation: str(data, 'recommendation', { required: true, max: 3000, label: 'Recomendación final' }), evidence: str(data, 'evidence', { max: 1000 }), decision };
+  const review = { n: r.reviews.length + 1, round: currentRound(r).n, reviewer: user.name, reviewerId: user.id, independent: currentAssignment(r)?.developerId !== user.id, at: now(), summary: str(data, 'summary', { required: true, min: 10, max: 3000, label: 'Resumen de implementación' }), testResult: lastTests?.outcome || 'Sin pruebas', criteria: criteriaResult, rolloutCompliance: pick(data.rolloutCompliance, C.ROLLOUT_COMPLIANCE, 'el cumplimiento del rollout', { field: 'rolloutCompliance' }), conditions, modifiedModules: (r.changes || []).map(c => `${c.module} · ${c.operation}${c.inScope ? '' : ' (fuera de alcance)'}`), deviationsFound: str(data, 'deviationsFound', { max: 3000 }), pendingIssues: str(data, 'pendingIssues', { max: 3000 }), recommendation: str(data, 'recommendation', { required: true, max: 3000, label: 'Recomendación final' }), evidence: str(data, 'evidence', { max: 1000 }), decision };
   if (decision === 'Conforme') {
     const problems = [];
     if (lastTests?.outcome !== 'Todas superadas' || lastTests.round !== review.round) problems.push('las pruebas de la ronda actual no están todas superadas');
@@ -556,19 +548,7 @@ function reviewAction(db, r, number, user, data) {
   if (decision === 'Requiere correcciones') transition(db, r, user, 'Correcciones requeridas', 'Revisión postimplementación', `Revisión ${review.n}: requiere correcciones. ${review.recommendation}`);
   else log(db, r, user, 'Revisión postimplementación', `Revisión ${review.n}: ${decision}${review.independent ? '' : ' (realizada por el implementador)'}. ${review.recommendation}`);
 }
-function finalizeRevisions(db, number, success) {
-  for (const l of links(db, number).filter(l => l.kind === 'modificado' && l.revisionId)) {
-    const rev = db.prepare('SELECT id,ics_id,status FROM ics_revisions WHERE id=?').get(l.revisionId);
-    if (rev?.status !== 'En cambio') continue;
-    if (success) {
-      const ics = db.prepare('SELECT current_revision_id FROM ics WHERE id=?').get(rev.ics_id);
-      if (ics.current_revision_id) db.prepare("UPDATE ics_revisions SET status='Reemplazada' WHERE id=?").run(ics.current_revision_id);
-      db.prepare("UPDATE ics_revisions SET status='Vigente' WHERE id=?").run(rev.id);
-      db.prepare(`UPDATE ics SET current_revision_id=?, version=version+1${l.operation === 'Eliminación' ? ", status='Retirado'" : ''} WHERE id=?`).run(rev.id, rev.ics_id);
-    } else db.prepare("UPDATE ics_revisions SET status='Descartada' WHERE id=?").run(rev.id);
-  }
-}
-function closeAction(db, r, number, user, data) {
+function closeAction(db, r, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En revisión']);
   const round = currentRound(r).n, review = r.reviews.at(-1);
@@ -581,9 +561,7 @@ function closeAction(db, r, number, user, data) {
   }
   const resultingVersion = str(data, 'resultingVersion', { max: 40, label: 'Versión resultante' });
   version(resultingVersion, 'Versión resultante', 'resultingVersion', { greaterThan: r.currentVersion });
-  const modified = links(db, number).filter(l => l.kind === 'modificado');
-  r.closure = { result, administrative: 'Cerrada', by: user.name, byId: user.id, at: now(), summary: str(data, 'summary', { required: true, min: 10, max: 3000, label: 'Resumen del trabajo' }), modifications: modified.map(l => `${l.code} ${l.operation}: ${l.description}`), evidence: str(data, 'evidence', { max: 1000 }), testsResult: r.testRounds.at(-1)?.outcome || 'Sin pruebas', reviewResult: review.decision, gitRefs: r.gitRefs.map(g => `${g.kind}: ${g.value}`), icsModified: modified.map(l => `${l.code} ${l.fromRevision}→${l.toRevision}`), resultingVersion, justification };
-  finalizeRevisions(db, number, result === 'Exitoso');
+  r.closure = { result, administrative: 'Cerrada', by: user.name, byId: user.id, at: now(), summary: str(data, 'summary', { required: true, min: 10, max: 3000, label: 'Resumen del trabajo' }), modifications: (r.changes || []).map(c => `${c.module} · ${c.operation}: ${c.description}`), evidence: str(data, 'evidence', { max: 1000 }), testsResult: r.testRounds.at(-1)?.outcome || 'Sin pruebas', reviewResult: review.decision, gitRefs: r.gitRefs.map(g => `${g.kind}: ${g.value}${g.verified ? ' (verificada)' : ''}`), modulesModified: [...new Set((r.changes || []).map(c => c.module))], resultingVersion, justification };
   notify(r, `Solicitud cerrada con resultado ${result.toLowerCase()}.`);
   transition(db, r, user, 'Cerrada', 'Cierre', `Resultado ${result}. ${justification || r.closure.summary}`);
 }
@@ -620,11 +598,9 @@ function mutate(db, id, action, user, data) {
         audit(db, { entityType: 'CRF', entityId: r.id, action: 'Eliminación de CRF', actor: user, from: r.status, justification: `Eliminada por su solicitante antes de la recepción del CCC: ${r.title}` });
         return null;
       }
-      const { fields, suggested } = requestFields(db, data, r.requesterType, r.date);
+      const { fields } = requestFields(db, data, r.requesterType, r.date);
       auditChanges(db, { entityType: 'CRF', entityId: r.id, action: 'Modificación de información', actor: user, from: r.status, to: r.status }, r, fields, Object.keys(fields));
       Object.assign(r, fields);
-      db.prepare("DELETE FROM request_ics WHERE request_id=? AND kind='sugerido'").run(number);
-      for (const ics of suggested) insertLink(db, number, ics.id, 'sugerido', user);
       r.history.push({ status: r.status, date: now(), responsible: user.name, responsibleId: user.id, action: 'Petición actualizada', note: 'El solicitante actualizó la petición antes de su recepción.' });
       break;
     }
@@ -662,42 +638,36 @@ function mutate(db, id, action, user, data) {
     case 'start': startImplementation(db, r, user, data); break;
     case 'activity': activityAction(db, r, user, data); break;
     case 'git': gitAction(db, r, user, data); break;
-    case 'ics-change': icsChangeAction(db, r, number, user, data); break;
+    case 'git-refresh': gitRefreshAction(db, r, user, data); break;
+    case 'module-change': moduleChangeAction(db, r, user, data); break;
     case 'deviation': deviationAction(db, r, user, data); break;
-    case 'scope': scopeAction(db, r, number, user, data); break;
-    case 'send-to-tests': sendToTests(db, r, number, user, data); break;
+    case 'scope': scopeAction(db, r, user, data); break;
+    case 'send-to-tests': sendToTests(db, r, user, data); break;
     case 'test': testAction(db, r, user, data); break;
     case 'finish-tests': finishTests(db, r, user, data); break;
     case 'backout': backoutAction(db, r, user, data); break;
-    case 'review': reviewAction(db, r, number, user, data); break;
-    case 'close': closeAction(db, r, number, user, data); break;
+    case 'review': reviewAction(db, r, user, data); break;
+    case 'close': closeAction(db, r, user, data); break;
     case 'close-rejected': closeRejected(db, r, user, data); break;
     case 'reopen': reopenAction(db, r, number, user, data); break;
     default: fail(404, 'Acción no encontrada.');
   }
-  return present(db, number, save(db, r));
+  return present(save(db, r));
 }
 // El CCC puede corregir cualquier CRF abierto. Los datos originales se conservan en `original`
 // y cada corrección queda registrada con su motivo y los campos modificados (RN-22, RN-35).
-const CRF_KEYS = ['project', 'module', 'title', 'currentBehavior', 'featureMissing', 'description', 'justification', 'result', 'desiredDate', 'observations', 'modificationType', 'environment', 'currentVersion', 'targetVersion', 'spec', 'specUrl', 'businessRulesAffected', 'businessRules', 'acceptanceCriteria', 'suggestedIcsText', 'proposedPriority'];
+const CRF_KEYS = ['project', 'modules', 'module', 'title', 'currentBehavior', 'featureMissing', 'description', 'justification', 'result', 'desiredDate', 'observations', 'modificationType', 'environment', 'currentVersion', 'targetVersion', 'spec', 'specUrl', 'businessRulesAffected', 'businessRules', 'acceptanceCriteria', 'components', 'proposedPriority'];
 function cccCorrection(db, r, number, user, data) {
   requireCCC(r, user);
   if (r.status === 'Cerrada') fail(409, 'La solicitud está cerrada; reábrela para corregirla.');
   const reason = str(data, 'correctionReason', { required: true, min: 10, max: 2000, label: 'Motivo de la corrección' });
-  const { fields, suggested } = requestFields(db, data, r.requesterType, r.date);
-  const before = links(db, number).filter(l => l.kind === 'sugerido').map(l => l.code).sort();
-  const after = suggested.map(i => i.code).sort();
-  const changed = Object.keys(fields).filter(k => JSON.stringify(r[k] ?? null) !== JSON.stringify(fields[k] ?? null));
-  if (JSON.stringify(before) !== JSON.stringify(after)) changed.push('suggestedIcs');
+  if (!r.modules) r.modules = modulesOf(r);
+  const { fields } = requestFields(db, data, r.requesterType, r.date);
+  const changed = Object.keys(fields).filter(k => k !== 'module' && JSON.stringify(r[k] ?? null) !== JSON.stringify(fields[k] ?? null));
   if (!changed.length) fail(400, 'No hay cambios que guardar.');
-  r.original ||= { ...Object.fromEntries(CRF_KEYS.filter(k => k in r).map(k => [k, r[k]])), suggestedIcs: before, savedAt: now() };
-  auditChanges(db, { entityType: 'CRF', entityId: r.id, action: 'Corrección del CCC', actor: user, from: r.status, to: r.status, justification: reason }, r, fields, Object.keys(fields));
+  r.original ||= { ...Object.fromEntries(CRF_KEYS.filter(k => k in r && k !== 'module').map(k => [k, r[k]])), savedAt: now() };
+  auditChanges(db, { entityType: 'CRF', entityId: r.id, action: 'Corrección del CCC', actor: user, from: r.status, to: r.status, justification: reason }, r, fields, Object.keys(fields).filter(k => k !== 'module'));
   Object.assign(r, fields);
-  if (changed.includes('suggestedIcs')) {
-    db.prepare("DELETE FROM request_ics WHERE request_id=? AND kind='sugerido'").run(number);
-    for (const ics of suggested) insertLink(db, number, ics.id, 'sugerido', user);
-    audit(db, { entityType: 'CRF', entityId: r.id, action: 'Corrección del CCC', actor: user, field: 'ICS sugeridos', oldValue: before.join(', ') || '—', newValue: after.join(', ') || '—', justification: reason });
-  }
   (r.corrections ||= []).push({ by: user.name, byId: user.id, at: now(), reason, fields: changed });
   notify(r, `El CCC corrigió datos de tu solicitud: ${reason}`);
   log(db, r, user, 'Corrección del CCC', `Campos: ${changed.join(', ')}. Motivo: ${reason}`);
@@ -718,7 +688,7 @@ function uploadAttachments(db, id, user, data) {
   const saved = files.storeFiles(db, { requestNumber: number, requestCode: r.id, context, files: data.files, user, fail });
   if (!saved.length) fail(400, 'Selecciona al menos un archivo.');
   log(db, r, user, 'Registro de evidencia', `${saved.length} archivo(s) adjuntado(s): ${saved.map(s => s.filename).join(', ')}.`);
-  return present(db, number, save(db, r));
+  return present(save(db, r));
 }
 
 // ---------- Seguimiento sin cuenta ----------
@@ -730,7 +700,7 @@ function publicRequest(db, data) {
   if (!valid) fail(404, 'No se encontró una solicitud con ese código y clave de seguimiento.');
   return r;
 }
-// Solo información comunicable al solicitante: nada del análisis interno, ICS o planes.
+// Solo información comunicable al solicitante: nada del análisis interno ni de los planes.
 function publicView(r) {
   const auth = currentAuthorization(r);
   return { id: r.id, title: r.title, date: r.date, status: r.status, revision: r.revision, pendingInfo: r.status === 'Pendiente de información' ? r.infoRequests.at(-1)?.missing : null, decision: auth ? { decision: auth.decision, at: auth.at, justification: auth.justification, conditions: auth.conditions.map(c => c.text) } : null, closure: r.closure ? { result: r.closure.result, administrative: r.closure.administrative, at: r.closure.at } : null, notices: r.notices || [] };
@@ -745,48 +715,33 @@ function publicClarification(db, data) {
 
 // ---------- Lecturas ----------
 const clean = r => { const { trackingHash, ...rest } = r; return rest; };
-const EMPTY_LINKS = () => ({ sugerido: [], potencial: [], autorizado: [], modificado: [] });
-// Respuesta para el cliente: sin el hash de seguimiento y con el resumen de ICS relacionados.
-function present(db, number, r) { return { ...clean(r), ics: linkSummary(db).get(number) || EMPTY_LINKS() }; }
+// Respuesta para el cliente: sin el hash de seguimiento y con la lista de módulos normalizada.
+function present(r) { return { ...clean(r), modules: modulesOf(r) }; }
 function allVisible(db, user) {
   return db.prepare('SELECT id,document FROM requests ORDER BY id').all().map(x => ({ number: x.id, r: JSON.parse(x.document) })).filter(x => canView(x.r, user));
 }
-function linkSummary(db) {
-  const map = new Map();
-  for (const l of db.prepare("SELECT ri.request_id AS rid,ri.kind,ri.active,i.code FROM request_ics ri JOIN ics i ON i.id=ri.ics_id").all()) {
-    if (l.kind === 'autorizado' && !l.active) continue;
-    const entry = map.get(l.rid) || { sugerido: [], potencial: [], autorizado: [], modificado: [] };
-    if (!entry[l.kind].includes(l.code)) entry[l.kind].push(l.code);
-    map.set(l.rid, entry);
-  }
-  return map;
-}
-function snapshot(db, user) {
-  const summary = linkSummary(db);
-  return { requests: allVisible(db, user).map(({ number, r }) => ({ ...clean(r), ics: summary.get(number) || EMPTY_LINKS() })) };
-}
-function configurationAudit(r, all) {
-  const active = all.filter(l => l.kind !== 'autorizado' || l.active);
-  const codes = kind => [...new Set(active.filter(l => l.kind === kind).map(l => l.code))];
-  const authorized = codes('autorizado'), modified = codes('modificado'), potential = codes('potencial');
-  const findings = [];
-  const outside = modified.filter(c => !authorized.includes(c));
-  const untouched = authorized.filter(c => !modified.includes(c));
-  if (outside.length) findings.push(`ICS modificados fuera de lo autorizado: ${outside.join(', ')}.`);
-  if (untouched.length && r.status === 'Cerrada') findings.push(`ICS autorizados que no se modificaron: ${untouched.join(', ')}.`);
-  for (const d of r.deviations || []) if (d.status !== 'Autorizada') findings.push(`Desviación ${d.id} ${d.status.toLowerCase()}: ${d.description}`);
-  const review = r.reviews?.at(-1);
-  if (review) { review.criteria.filter(c => !c.met).forEach(c => findings.push(`Criterio incumplido: ${c.text}`)); review.conditions.filter(c => !c.met).forEach(c => findings.push(`Condición sin verificar: ${c.text}`)); }
-  if (r.closure?.result === 'Exitoso' && !r.gitRefs?.length) findings.push('Cierre exitoso sin referencias de control de versiones registradas.');
-  if (r.flags?.length) findings.push(...r.flags);
-  const auth = currentAuthorization(r);
-  return { requested: { title: r.title, description: r.description, result: r.result, suggested: codes('sugerido') }, authorized: auth ? { decision: auth.decision, at: auth.at, by: auth.decidedBy, conditions: auth.conditions, plannedChanges: auth.evaluationSnapshot?.plannedChanges || '' } : null, potential, authorizedIcs: authorized, modifiedIcs: modified, evidences: { git: r.gitRefs?.length || 0, tests: r.tests?.length || 0, backouts: r.backouts?.length || 0 }, review: review ? { decision: review.decision, by: review.reviewer, independent: review.independent } : null, closure: r.closure, findings, note: 'Verificación académica de la configuración; no equivale a una auditoría certificada.' };
-}
+function snapshot(db, user) { return { requests: allVisible(db, user).map(({ r }) => present(r)) }; }
 function requestDetail(db, id, user) {
   const { r, number } = getRequest(db, id, user);
-  const all = links(db, number);
-  return { request: clean(r), links: all, attachments: files.listAttachments(db, number), audit: db.prepare("SELECT * FROM audit_events WHERE entity_type='CRF' AND entity_id=? ORDER BY id").all(r.id), configAudit: configurationAudit(r, all), reviewCriteria: reviewCriteria(r) };
+  return { request: present(r), attachments: files.listAttachments(db, number), audit: db.prepare("SELECT * FROM audit_events WHERE entity_type='CRF' AND entity_id=? ORDER BY id").all(r.id), reviewCriteria: reviewCriteria(r), authorizedModules: authorizedModules(r) };
 }
+// ---------- Issue de GitHub asociada al CRF ----------
+// La creación y la sincronización ocurren fuera de la transacción (red); aquí solo se guarda el resultado.
+function recordIssue(db, id, result) {
+  const { r } = getRequest(db, id, null);
+  const before = r.github?.issue?.number || null;
+  r.github = { ...(r.github || {}), ...(result.issue ? { issue: result.issue } : {}), lastSync: { at: now(), ok: result.ok, message: result.message || '', state: result.issue?.state || r.github?.issue?.state || null } };
+  if (result.issue && !before) log(db, r, null, 'Issue de GitHub', `Issue #${result.issue.number} creada en ${result.issue.repo}: ${result.issue.url}`);
+  else if (!result.ok) audit(db, { entityType: 'CRF', entityId: r.id, action: 'Sincronización con GitHub', actor: null, justification: result.message });
+  return present(save(db, r));
+}
+function findGitRef(db, id, user, refId) {
+  const { r } = getRequest(db, id, user);
+  const ref = (r.gitRefs || []).find(g => g.id === refId);
+  if (!ref) fail(404, 'Referencia no encontrada.');
+  return ref;
+}
+function issueData(db, id) { return present(getRequest(db, id, null).r); }
 function attachmentFor(db, attachmentId, user) {
   const file = files.readAttachment(db, attachmentId);
   if (!file) fail(404, 'Adjunto no encontrado.');
@@ -796,4 +751,4 @@ function attachmentFor(db, attachmentId, user) {
 }
 function users(db) { return db.prepare("SELECT id,name,email,role FROM users WHERE active=1 AND role IN ('experto','ccc') ORDER BY name").all(); }
 
-module.exports = { HttpError, fail, str, pick, list, num, link, isoDate, bool, now, isCCC, isDev, parseCode, canView, snapshot, createRequest, mutate, uploadAttachments, trackRequest, publicClarification, requestDetail, attachmentFor, users, allVisible, linkSummary, currentAuthorization, currentAssignment, reviewCriteria, EVAL_TEXT, EVAL_LIST, EVAL_NUM };
+module.exports = { HttpError, fail, str, pick, list, num, link, isoDate, bool, now, isCCC, isDev, parseCode, canView, snapshot, createRequest, mutate, uploadAttachments, trackRequest, publicClarification, requestDetail, attachmentFor, users, allVisible, modulesOf, authorizedModules, currentAuthorization, currentAssignment, reviewCriteria, gitInput, findGitRef, recordIssue, issueData, GITHUB_RESULT, EVAL_TEXT, EVAL_LIST, EVAL_NUM };

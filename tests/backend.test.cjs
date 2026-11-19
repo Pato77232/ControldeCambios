@@ -6,19 +6,22 @@ const { mkdtempSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const http = require('node:http');
 const { createApp } = require('../backend/server.cjs');
+const { createGithub } = require('../backend/github.cjs');
 const { openDatabase } = require('../backend/database.cjs');
 const { configureTeam } = require('../backend/configure-team.cjs');
 const { hashPassword } = require('../backend/auth.cjs');
 
 const PASSWORD = 'Test-ChangeFlow-2026!';
 const USERS = [['team-leslie', 'Leslie', 'leslie@uta.edu.ec', 'experto'], ['team-david', 'David', 'david@uta.edu.ec', 'ccc'], ['team-edwin', 'Edwin', 'edwin@uta.edu.ec', 'experto'], ['team-pablo', 'Pablo', 'pablo@uta.edu.ec', 'experto'], ['team-shirley', 'Shirley', 'shirley@uta.edu.ec', 'experto'], ['user-ana', 'Ana', 'ana@example.com', 'usuario'], ['ccc-maria', 'María', 'maria@uta.edu.ec', 'ccc']];
-const userCrf = { requesterType: 'usuario', module: 'Reservas y pasajeros', title: 'Cancelar boletos', currentBehavior: 'No existe la opción.', featureMissing: true, description: 'Permitir cancelar un boleto comprado desde la aplicación.', justification: 'Evita viajar a la oficina de la cooperativa para cancelar.', result: 'Boleto cancelado y asiento liberado.' };
-const devCrf = extra => ({ ...userCrf, requesterType: 'experto', title: 'Cancelación técnica', modificationType: 'Modificación', environment: 'Pruebas', currentVersion: 'No determinada', acceptanceCriteria: ['El boleto se cancela', 'El asiento se libera'], suggestedIcsText: 'Servicio de cancelación', ...extra });
+const userCrf = { requesterType: 'usuario', modules: ['Reservas y pasajeros'], title: 'Cancelar boletos', currentBehavior: 'No existe la opción.', featureMissing: true, description: 'Permitir cancelar un boleto comprado desde la aplicación.', justification: 'Evita viajar a la oficina de la cooperativa para cancelar.', result: 'Boleto cancelado y asiento liberado.' };
+const devCrf = extra => ({ ...userCrf, requesterType: 'experto', title: 'Cancelación técnica', modificationType: 'Modificación', environment: 'Pruebas', currentVersion: 'No determinada', acceptanceCriteria: ['El boleto se cancela', 'El asiento se libera'], components: 'Servicio de cancelación', ...extra });
 const tmp = () => mkdtempSync(join(tmpdir(), 'changeflow-'));
 
-async function start(filename) {
-  const app = createApp({ filename, seedPassword: PASSWORD, initialUsers: USERS });
+async function start(filename, options = {}) {
+  // Por defecto sin GitHub: las pruebas generales no dependen de la red.
+  const app = createApp({ filename, seedPassword: PASSWORD, initialUsers: USERS, github: createGithub({}), ...options });
   await new Promise((resolve, reject) => { app.server.once('error', reject); app.server.listen(0, '127.0.0.1', resolve); });
   app.url = `http://127.0.0.1:${app.server.address().port}`;
   return app;
@@ -44,27 +47,27 @@ async function team(app) {
   for (const [, name, email] of USERS) c[name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')] = await client(app, email);
   return c;
 }
-const fullPlan = (ics = []) => ({
-  itilType: 'Normal', classificationJustification: 'Cambio funcional con evaluación ordinaria.', plannedChanges: 'Modificar ventas y esquema.', icsNote: ics.length ? '' : 'Sin ICS catalogados todavía.',
+const fullPlan = (affectedModules = [{ module: 'Reservas y pasajeros', operation: 'Modificación' }]) => ({
+  itilType: 'Normal', classificationJustification: 'Cambio funcional con evaluación ordinaria.', plannedChanges: 'Modificar ventas y esquema.', affectedModules,
   impact: 'Medio', technicalImpact: 'Afecta ventas.', functionalImpact: 'Cambia la compra.', risks: 'Liberación incorrecta\nReembolsos duplicados', urgency: 'Media', priority: 'Alta',
   feasibility: 'Viable', feasibilityJustification: 'Equipo con experiencia.', effortHours: 16, durationDays: 4, resources: 'No se requieren recursos adicionales.',
   rolloutObjective: 'Incorporar la cancelación.', rolloutSteps: ['Rama', 'Implementación', 'Pruebas'], rolloutDependencies: 'Ninguna.', rolloutResponsibles: 'Asignado', rolloutChecks: 'Compra normal.', rolloutCompletion: 'Criterios cumplidos.',
   backoutTriggers: 'Errores en ventas.', backoutActions: ['Revertir merge'], backoutVersion: '1.2.0', backoutData: 'Respaldo previo.', backoutResponsible: 'Asignado', backoutVerification: 'Compra normal.',
   testObjective: 'Verificar cancelación.', testTypes: 'Funcionales', testCriteria: ['El boleto se cancela'], testSuccess: 'Todas superadas.', testEvidence: 'Capturas.',
-  downtimeValue: 0, downtimeUnit: 'minutos', plannedDate: '2026-12-01T22:00', targetVersion: '1.3.0', potentialIcs: ics
+  downtimeValue: 0, downtimeUnit: 'minutos', plannedDate: '2026-12-01T22:00', targetVersion: '1.3.0'
 });
-async function createIcs(c, data) { const r = await c.call('/api/ics', 'POST', { kind: 'Básico', categoryId: 3, description: 'Elemento de prueba de BusesUTA.', ...data }); assert.equal(r.status, 201, r.data?.error); return r.data.ics; }
 
 test('seguridad: sesión, CSRF, origen, rutas privadas y permisos por rol', async () => {
   const app = await start(':memory:');
   try {
     const anon = await client(app), t = await team(app);
     assert.equal((await anon.call('/api/requests')).status, 401);
-    assert.equal((await anon.call('/api/ics')).status, 401);
+    assert.equal((await anon.call('/api/reports')).status, 401);
     for (const p of ['/backend/data/changeflow.sqlite', '/.env', '/backend/server.cjs']) assert.equal((await anon.call(p)).status, 404);
     assert.equal((await t.leslie.call('/api/requests', 'POST', devCrf(), { 'X-CSRF-Token': 'falso' })).status, 403);
     assert.equal((await t.leslie.call('/api/requests', 'POST', devCrf(), { Origin: 'https://malicioso.example' })).status, 403);
-    assert.equal((await t.ana.call('/api/ics')).status, 403, 'el usuario final no consulta el catálogo interno');
+    assert.equal((await t.ana.call('/api/reports')).status, 403, 'el usuario final no consulta los reportes internos');
+    assert.equal((await t.david.call('/api/ics')).status, 404, 'el catálogo de ICS ya no existe');
     // RN-03 / RN-27: ni el usuario final ni el desarrollador pueden ejecutar acciones del CCC por HTTP directo.
     const id = (await t.ana.call('/api/requests', 'POST', userCrf)).data.request.id;
     for (const c of [t.ana, t.leslie]) {
@@ -90,11 +93,16 @@ test('CRF: validaciones, códigos únicos, identidad del iniciador y bloqueo tra
   try {
     const t = await team(app);
     assert.equal((await t.ana.call('/api/requests', 'POST', { ...userCrf, description: 'corto' })).status, 400);
-    assert.equal((await t.ana.call('/api/requests', 'POST', { ...userCrf, module: 'Inventado' })).status, 400);
+    assert.equal((await t.ana.call('/api/requests', 'POST', { ...userCrf, modules: ['Inventado'] })).status, 400);
     assert.equal((await t.ana.call('/api/requests', 'POST', { ...userCrf, requesterType: 'experto' })).status, 403);
     assert.equal((await t.leslie.call('/api/requests', 'POST', devCrf({ acceptanceCriteria: [] }))).status, 400);
-    assert.equal((await t.leslie.call('/api/requests', 'POST', devCrf({ suggestedIcsText: '' }))).status, 400, 'requiere ICS o sugerencia');
-    for (const [extra, field] of [[{ currentVersion: '1.0' }, 'currentVersion'], [{ currentVersion: '01.2.0' }, 'currentVersion'], [{ currentVersion: '1.2.0', targetVersion: '1.2.0' }, 'targetVersion'], [{ currentVersion: '1.2.0', targetVersion: '1.1.9' }, 'targetVersion'], [{ module: 'Inventado' }, 'module']]) {
+    for (const modules of [[], ['Inventado'], ['No estoy seguro', 'Cooperativas']]) {
+      const bad = await t.leslie.call('/api/requests', 'POST', devCrf({ modules }));
+      assert.equal(bad.status, 400); assert.equal(bad.data.field, 'modules');
+    }
+    const multi = (await t.ana.call('/api/requests', 'POST', { ...userCrf, modules: ['Pagos y comprobantes', 'Notificaciones'] })).data.request;
+    assert.deepEqual(multi.modules, ['Pagos y comprobantes', 'Notificaciones']); assert.equal(multi.module, 'Pagos y comprobantes');
+    for (const [extra, field] of [[{ currentVersion: '1.0' }, 'currentVersion'], [{ currentVersion: '01.2.0' }, 'currentVersion'], [{ currentVersion: '1.2.0', targetVersion: '1.2.0' }, 'targetVersion'], [{ currentVersion: '1.2.0', targetVersion: '1.1.9' }, 'targetVersion'], [{ modules: ['Inventado'] }, 'modules']]) {
       const bad = await t.leslie.call('/api/requests', 'POST', devCrf(extra));
       assert.equal(bad.status, 400); assert.equal(bad.data.field, field, 'el servidor indica el campo con error');
     }
@@ -174,8 +182,7 @@ test('ficha única del CCC: borrador, análisis, planificación y decisiones coh
   const app = await start(':memory:');
   try {
     const t = await team(app);
-    const ics = await createIcs(t.david, { name: 'Módulo de ventas' });
-    const id = (await t.leslie.call('/api/requests', 'POST', devCrf({ suggestedIcs: [ics.id] }))).data.request.id;
+    const id = (await t.leslie.call('/api/requests', 'POST', devCrf())).data.request.id;
     assert.equal((await t.david.act(id, 'evaluation', { step: 'draft' })).status, 409, 'requiere iniciar el análisis');
     await t.david.ok(id, 'receive'); await t.david.ok(id, 'validate');
     // Guardado parcial: no se marca como completado.
@@ -188,31 +195,40 @@ test('ficha única del CCC: borrador, análisis, planificación y decisiones coh
     assert.equal((await t.david.act(id, 'decision', { decision: 'Aprobado', justification: 'Intento prematuro.' })).status, 409);
     // Otro integrante del CCC no puede tomar una ficha ajena.
     assert.equal((await t.maria.act(id, 'evaluation', { step: 'draft' })).status, 403);
-    const planned = await t.david.ok(id, 'evaluation', { ...fullPlan([{ icsId: ics.id, operation: 'Modificación' }]), step: 'planning' });
+    const planned = await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'planning' });
     assert.equal(planned.status, 'Pendiente de aprobación'); assert.equal(planned.priority, 'Alta');
     // Una modificación posterior obliga a completar de nuevo la planificación.
-    const changed = await t.david.ok(id, 'evaluation', { ...fullPlan([{ icsId: ics.id, operation: 'Modificación' }]), impact: 'Alto', step: 'draft' });
+    const changed = await t.david.ok(id, 'evaluation', { ...fullPlan(), impact: 'Alto', step: 'draft' });
     assert.equal(changed.status, 'En planificación');
-    await t.david.ok(id, 'evaluation', { ...fullPlan([{ icsId: ics.id, operation: 'Modificación' }]), feasibility: 'No viable', step: 'planning' });
+    await t.david.ok(id, 'evaluation', { ...fullPlan(), feasibility: 'No viable', step: 'planning' });
     // Caso D: un cambio no viable no puede aprobarse, ni siquiera con condiciones; se informa el error.
     for (const decision of ['Aprobado', 'Aprobado con condiciones']) {
       const blocked = await t.david.act(id, 'decision', { decision, justification: 'Se aprueba igualmente.', conditions: [{ text: 'X', verification: 'Y' }] });
       assert.equal(blocked.status, 409); assert.match(blocked.data.error, /No viable/); assert.equal(blocked.data.field, 'decision');
     }
     // Versión objetivo: formato válido y mayor que la versión actual del CRF.
-    const badVersion = await t.david.act(id, 'evaluation', { ...fullPlan([{ icsId: ics.id, operation: 'Modificación' }]), targetVersion: '1.3', step: 'draft' });
+    const badVersion = await t.david.act(id, 'evaluation', { ...fullPlan(), targetVersion: '1.3', step: 'draft' });
     assert.equal(badVersion.status, 400); assert.equal(badVersion.data.field, 'targetVersion');
-    await t.david.ok(id, 'evaluation', { ...fullPlan([{ icsId: ics.id, operation: 'Modificación' }]), step: 'planning' });
+    await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'planning' });
     assert.equal((await t.david.act(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Se aprueba con condiciones.', conditions: [{ text: 'Respaldo', verification: '' }] })).status, 400);
     assert.equal((await t.david.act(id, 'decision', { decision: 'Aprobado', justification: 'Con condiciones ocultas.', conditions: [{ text: 'X', verification: 'Y' }] })).status, 400);
     const approved = await t.david.ok(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Beneficio alto con riesgo controlado.', conditions: [{ text: 'Respaldar la base', verification: 'Evidencia en la revisión' }] });
     assert.equal(approved.status, 'Aprobada con condiciones');
     const decision = approved.decisions.at(-1);
     assert.equal(decision.conditions[0].id, 'C1'); assert.equal(decision.evaluationSnapshot.feasibility, 'Viable');
-    assert.deepEqual(approved.ics.autorizado, [ics.code]);
+    assert.deepEqual(approved.decisions.at(-1).authorizedModules, [{ module: 'Reservas y pasajeros', operation: 'Modificación' }]);
+    assert.deepEqual((await t.david.call(`/api/requests/${id}`)).data.authorizedModules, ['Reservas y pasajeros']);
+    const noModules = await t.david.act(id, 'reevaluate', { reason: 'Revisar los módulos afectados.' });
+    assert.equal(noModules.status, 200);
+    const missing = await t.david.act(id, 'evaluation', { ...fullPlan([]), step: 'planning' });
+    assert.equal(missing.status, 400); assert.match(missing.data.error, /Módulos afectados/);
+    assert.equal((await t.david.act(id, 'evaluation', { ...fullPlan([{ module: 'No estoy seguro', operation: 'Modificación' }]), step: 'draft' })).data.field, 'affectedModules');
+    await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'planning' });
+    await t.david.ok(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Beneficio alto con riesgo controlado.', conditions: [{ text: 'Respaldar la base', verification: 'Evidencia en la revisión' }] });
     // Reevaluar conserva la decisión anterior como sustituida.
     const re = await t.david.ok(id, 'reevaluate', { reason: 'Cambió la disponibilidad del equipo.' });
-    assert.equal(re.status, 'En planificación'); assert.equal(re.decisions[0].superseded, true); assert.equal(re.ics.autorizado.length, 0);
+    assert.equal(re.status, 'En planificación'); assert.equal(re.decisions.filter(d => d.kind === 'Autorización').every(d => d.superseded), true);
+    assert.deepEqual((await t.david.call(`/api/requests/${id}`)).data.authorizedModules, []);
     // Caso C: viable pero rechazado; el rechazo puede emitirse sin planes completos.
     const c = (await t.pablo.call('/api/requests', 'POST', devCrf())).data.request.id;
     await t.david.ok(c, 'receive'); await t.david.ok(c, 'validate');
@@ -242,14 +258,9 @@ test('ejecución: asignación, implementación, desviación, pruebas fallidas, r
   const app = await start(join(dir, 'flow.sqlite'));
   try {
     const t = await team(app);
-    const ventas = await createIcs(t.david, { name: 'Módulo de ventas', revision: '1.2.0' });
-    const esquema = await createIcs(t.david, { name: 'Esquema de reservas', revision: 'r14', categoryId: 4 });
-    const lb = (await t.david.call('/api/baselines', 'POST', { name: 'Base inicial', items: [{ revisionId: ventas.current_revision_id }] })).data.code;
-    await t.david.call(`/api/baselines/${lb}/submit`, 'POST', {});
-    assert.equal((await t.david.call(`/api/baselines/${lb}/decide`, 'POST', { decision: 'Aprobada', note: 'Configuración revisada.' })).status, 200);
-    const id = (await t.leslie.call('/api/requests', 'POST', devCrf({ suggestedIcs: [ventas.id] }))).data.request.id;
+    const id = (await t.leslie.call('/api/requests', 'POST', devCrf())).data.request.id;
     await t.david.ok(id, 'receive'); await t.david.ok(id, 'validate');
-    await t.david.ok(id, 'evaluation', { ...fullPlan([{ icsId: ventas.id, operation: 'Modificación' }]), step: 'planning' });
+    await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'planning' });
     await t.david.ok(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Beneficio alto.', conditions: [{ text: 'Respaldar la base', verification: 'Captura del respaldo' }] });
     assert.equal((await t.david.act(id, 'assign', { developerId: 'user-ana' })).status, 400, 'solo desarrolladores');
     assert.equal((await t.leslie.act(id, 'assign', { developerId: 'team-edwin' })).status, 403);
@@ -264,18 +275,22 @@ test('ejecución: asignación, implementación, desviación, pruebas fallidas, r
     assert.equal((await t.edwin.act(id, 'send-to-tests')).status, 409, 'sin actividades');
     await t.edwin.ok(id, 'activity', { description: 'Lógica de cancelación', hours: 6 });
     assert.equal((await t.edwin.act(id, 'git', { kind: 'Commit', value: 'no-es-un-sha' })).status, 400);
-    assert.equal((await t.edwin.act(id, 'git', { kind: 'Pull request', value: '#4', url: 'https://github.com/org/repo/issues/4' })).status, 400);
+    assert.equal((await t.edwin.act(id, 'git', { kind: 'Pull request', value: 'abc', url: 'https://github.com/org/repo/issues/4' })).status, 400);
     const git = await t.edwin.ok(id, 'git', { kind: 'Pull request', value: '#4', url: 'https://github.com/org/repo/pull/4' });
-    assert.equal(git.gitRefs[0].verified, false);
-    await t.edwin.ok(id, 'ics-change', { icsId: ventas.id, operation: 'Modificación', toRevision: '1.3.0', description: 'Caso de uso de cancelación.' });
-    assert.equal((await t.edwin.act(id, 'ics-change', { icsId: ventas.id, operation: 'Modificación', toRevision: '1.3.1', description: 'Otra revisión.' })).status, 409, 'una revisión en curso por ICS');
-    // Caso K: un ICS no autorizado genera una desviación que bloquea el avance.
-    const dev = await t.edwin.ok(id, 'ics-change', { icsId: esquema.id, operation: 'Modificación', toRevision: 'r15', description: 'Columna de cancelación.' });
-    assert.equal(dev.deviations[0].status, 'Pendiente');
+    assert.equal(git.gitRefs[0].verified, false); assert.equal(git.gitRefs[0].verification.status, 'sin configurar');
+    // Un cliente no puede marcar una referencia como verificada.
+    const forged = await t.edwin.ok(id, 'git', { kind: 'Rama', value: 'feature/x', verification: { ok: true }, verified: true });
+    assert.equal(forged.gitRefs.at(-1).verified, false);
+    await t.edwin.ok(id, 'module-change', { module: 'Reservas y pasajeros', operation: 'Modificación', description: 'Caso de uso de cancelación.' });
+    assert.equal((await t.edwin.act(id, 'module-change', { module: 'No estoy seguro', operation: 'Modificación', description: 'Sin módulo.' })).status, 400);
+    // Caso K: un módulo no autorizado genera una desviación que bloquea el avance.
+    const dev = await t.edwin.ok(id, 'module-change', { module: 'Pagos y comprobantes', operation: 'Modificación', description: 'Reembolso del pago.' });
+    assert.equal(dev.deviations[0].status, 'Pendiente'); assert.equal(dev.changes.at(-1).inScope, false);
     assert.equal((await t.edwin.act(id, 'send-to-tests')).status, 409);
     assert.equal((await t.edwin.act(id, 'scope', { deviationId: 'DES-1', decision: 'Autorizada', justification: 'Autoriza el desarrollador.' })).status, 403);
     const scoped = await t.david.ok(id, 'scope', { deviationId: 'DES-1', decision: 'Autorizada', justification: 'La columna es necesaria.' });
-    assert.ok(scoped.ics.autorizado.includes(esquema.code)); assert.equal(scoped.decisions.at(-1).kind, 'Ampliación de alcance');
+    assert.equal(scoped.decisions.at(-1).kind, 'Ampliación de alcance'); assert.equal(scoped.decisions.at(-1).module, 'Pagos y comprobantes');
+    assert.ok(scoped.changes.every(c => c.inScope)); assert.ok((await t.david.call(`/api/requests/${id}`)).data.authorizedModules.includes('Pagos y comprobantes'));
     await t.edwin.ok(id, 'send-to-tests');
     // Caso J: pruebas fallidas → correcciones, sin sobrescribir la ronda anterior.
     assert.equal((await t.pablo.act(id, 'finish-tests', { outcome: 'Todas superadas' })).status, 409, 'sin pruebas');
@@ -301,12 +316,7 @@ test('ejecución: asignación, implementación, desviación, pruebas fallidas, r
     assert.equal((await t.pablo.act(id, 'close', { result: 'Exitoso', summary: 'Cierre por otro.' })).status, 403);
     const closed = await t.edwin.ok(id, 'close', { result: 'Exitoso', summary: 'Cancelación disponible.', resultingVersion: '1.3.0' });
     assert.equal(closed.status, 'Cerrada'); assert.equal(closed.closure.result, 'Exitoso'); assert.equal(closed.decisions[0].decision, 'Aprobado con condiciones');
-    // Caso L: la línea base aprobada conserva la revisión original; el ICS avanza a la nueva.
-    const icsDetail = (await t.david.call(`/api/ics/${ventas.code}`)).data;
-    assert.equal(icsDetail.ics.currentRevision, '1.3.0');
-    assert.deepEqual(icsDetail.revisions.map(r => `${r.revision}:${r.status}`), ['1.2.0:Reemplazada', '1.3.0:Vigente']);
-    assert.equal(icsDetail.baselines[0].revision, '1.2.0');
-    assert.ok(icsDetail.requests.some(x => x.kind === 'modificado' && x.code === id));
+    assert.deepEqual(closed.closure.modulesModified, ['Reservas y pasajeros', 'Pagos y comprobantes']);
     // Reapertura documentada.
     assert.equal((await t.david.act(id, 'reopen', { reason: 'corto' })).status, 400);
     const reopened = await t.david.ok(id, 'reopen', { reason: 'Se detectó un efecto secundario en producción.' });
@@ -315,12 +325,12 @@ test('ejecución: asignación, implementación, desviación, pruebas fallidas, r
     // Cierre fallido con backout y cierre incompleto.
     const f = (await t.leslie.call('/api/requests', 'POST', devCrf())).data.request.id;
     await t.david.ok(f, 'receive'); await t.david.ok(f, 'validate');
-    await t.david.ok(f, 'evaluation', { ...fullPlan([{ icsId: esquema.id, operation: 'Modificación' }]), itilType: 'Emergencia', classificationJustification: 'Caída de ventas en producción que exige atención inmediata.', rolloutObjective: '', testTypes: '', step: 'planning' });
+    await t.david.ok(f, 'evaluation', { ...fullPlan(), itilType: 'Emergencia', classificationJustification: 'Caída de ventas en producción que exige atención inmediata.', rolloutObjective: '', testTypes: '', step: 'planning' });
     await t.david.ok(f, 'decision', { decision: 'Aprobado', justification: 'Emergencia autorizada.' });
     await t.david.ok(f, 'assign', { developerId: 'team-shirley' });
     await t.shirley.ok(f, 'start');
     await t.shirley.ok(f, 'activity', { description: 'Parche urgente', hours: 1 });
-    await t.shirley.ok(f, 'ics-change', { icsId: esquema.id, operation: 'Modificación', toRevision: 'r16', description: 'Parche.' });
+    await t.shirley.ok(f, 'module-change', { module: 'Reservas y pasajeros', operation: 'Modificación', description: 'Parche.' });
     await t.shirley.ok(f, 'send-to-tests');
     await t.leslie.ok(f, 'test', { name: 'Ventas', expected: 'OK', obtained: 'Falla', status: 'Fallida' });
     await t.leslie.ok(f, 'finish-tests', { outcome: 'Existen fallos', incident: 'El parche rompe el pago.', next: 'Revisión' });
@@ -331,62 +341,10 @@ test('ejecución: asignación, implementación, desviación, pruebas fallidas, r
     assert.equal((await t.shirley.act(f, 'close', { result: 'Fallido', summary: 'Se revirtió.' })).status, 400, 'justificación obligatoria');
     const fc = await t.shirley.ok(f, 'close', { result: 'Fallido', summary: 'Se revirtió.', justification: 'El parche se revirtió mediante el plan de backout.' });
     assert.equal(fc.closure.result, 'Fallido');
-    const r16 = (await t.david.call(`/api/ics/${esquema.code}`)).data.revisions.find(r => r.revision === 'r16');
-    assert.equal(r16.status, 'Descartada');
     const reports = (await t.david.call('/api/reports')).data;
     assert.equal(reports.counts.failed, 1);
     assert.equal((await t.david.call('/api/reports?result=Fallido')).data.rows.length, 1);
   } finally { await stop(app); rmSync(dir, { recursive: true, force: true }); }
-});
-
-test('ICS y líneas base: códigos, duplicados, ciclos, revisiones inmutables y composición congelada', async () => {
-  const app = await start(':memory:');
-  try {
-    const t = await team(app);
-    const parent = await createIcs(t.david, { name: 'Módulo de ventas', kind: 'Agregado' });
-    const child = await createIcs(t.david, { name: 'Selector de asientos', parentId: parent.id, path: 'src/asientos' });
-    assert.equal(parent.code, 'ICS-BUS-001'); assert.equal(child.code, 'ICS-BUS-002');
-    assert.equal(child.status, 'Identificado'); assert.equal(child.currentRevision, 'No determinada');
-    assert.equal((await t.david.call('/api/ics', 'POST', { kind: 'Básico', categoryId: 3, name: 'módulo de VENTAS', description: 'Duplicado del módulo.' })).status, 409);
-    assert.equal((await t.david.call('/api/ics', 'POST', { kind: 'Básico', categoryId: 3, name: 'Otro', description: 'Misma ruta que otro.', path: 'src/asientos' })).status, 409);
-    assert.equal((await t.david.call('/api/ics', 'POST', { kind: 'Básico', categoryId: 3, name: 'Hijo de básico', description: 'Contenedor inválido.', parentId: child.id })).status, 400);
-    const proposed = await createIcs(t.pablo, { name: 'Servicio de notificaciones', status: 'Bajo control de configuración' });
-    assert.equal(proposed.status, 'Propuesto', 'un desarrollador solo propone');
-    // Ciclo padre-hijo.
-    const agg2 = await createIcs(t.david, { name: 'Subsistema', kind: 'Agregado', parentId: parent.id });
-    const p = (await t.david.call(`/api/ics/${parent.code}`)).data.ics;
-    assert.equal((await t.david.call(`/api/ics/${parent.code}`, 'PATCH', { ...p, categoryId: p.category_id, parentId: agg2.id, ownerId: '', version: p.version })).status, 400);
-    assert.equal((await t.david.call(`/api/ics/${parent.code}`, 'PATCH', { ...p, categoryId: p.category_id, status: 'Bajo control de configuración', justification: 'Intento manual de control.', ownerId: '', parentId: '', version: p.version })).status, 409);
-    assert.equal((await t.pablo.call(`/api/ics/${parent.code}`, 'PATCH', { ...p, categoryId: p.category_id, ownerId: '', parentId: '', version: p.version })).status, 403);
-    // Relaciones.
-    assert.equal((await t.david.call(`/api/ics/${parent.code}/relations`, 'POST', { target: child.code, type: 'depende de' })).status, 200);
-    assert.equal((await t.david.call(`/api/ics/${child.code}/relations`, 'POST', { target: parent.code, type: 'depende de' })).status, 409);
-    // Línea base: no incluye ICS propuestos; aprobada queda congelada.
-    assert.equal((await t.david.call('/api/baselines', 'POST', { name: 'LB inválida', items: [{ revisionId: proposed.current_revision_id }] })).status, 400);
-    assert.equal((await t.pablo.call('/api/baselines', 'POST', { name: 'LB del desarrollador', items: [] })).status, 403);
-    const code = (await t.david.call('/api/baselines', 'POST', { name: 'LB 1', softwareVersion: '1.0.0', items: [{ revisionId: parent.current_revision_id }, { revisionId: child.current_revision_id }] })).data.code;
-    assert.equal(code, 'LB-BUS-001');
-    assert.equal((await t.david.call(`/api/baselines/${code}/decide`, 'POST', { decision: 'Aprobada', note: 'Sin revisión previa.' })).status, 409);
-    await t.david.call(`/api/baselines/${code}/submit`, 'POST', {});
-    assert.equal((await t.david.call(`/api/baselines/${code}/items`, 'POST', { items: [] })).status, 409);
-    assert.equal((await t.david.call(`/api/baselines/${code}/decide`, 'POST', { decision: 'Aprobada', note: 'Configuración revisada.' })).status, 200);
-    assert.equal((await t.david.call(`/api/ics/${child.code}`)).data.ics.status, 'Bajo control de configuración');
-    assert.equal((await t.david.call(`/api/ics/${child.code}/revisions`, 'POST', { revision: '2.0', notes: 'Cambio sin CRF.' })).status, 409, 'un ICS controlado solo cambia por CRF');
-    // RN-24: un ICS identificado después no se agrega automáticamente.
-    await createIcs(t.david, { name: 'Nuevo componente' });
-    assert.equal((await t.david.call('/api/baselines')).data.baselines[0].items.length, 2);
-    // La base de datos impide alterar una línea base aprobada o borrar revisiones aunque se intente directamente.
-    assert.throws(() => app.db.prepare('DELETE FROM baseline_items').run(), /no puede modificarse/);
-    assert.throws(() => app.db.prepare("UPDATE baselines SET name='x'").run(), /no puede modificarse/);
-    assert.throws(() => app.db.prepare("UPDATE ics_revisions SET revision='x'").run(), /no puede modificarse/);
-    assert.throws(() => app.db.prepare('DELETE FROM ics_revisions').run(), /no puede eliminarse/);
-    // Derivada: parte de las revisiones vigentes y no altera la anterior.
-    const d2 = (await t.david.call('/api/baselines', 'POST', { name: 'LB 2', derivedFrom: code })).data;
-    assert.equal(d2.baselines.find(b => b.code === d2.code).items.length, 2);
-    const audit = (await t.david.call(`/api/ics/${parent.code}`)).data.audit;
-    assert.ok(audit.some(e => e.action === 'Identificación de ICS'));
-    assert.ok(audit.some(e => e.action === 'Relación de ICS'));
-  } finally { await stop(app); }
 });
 
 test('auditoría, adjuntos y reportes: eventos inmutables, acceso protegido y CSV', async () => {
@@ -447,6 +405,7 @@ test('migración del modelo anterior: conserva datos, códigos y marca incoheren
       assert.equal(approved.decisions[0].legacy, true); assert.ok(approved.flags.length, 'incoherencia marcada para revisión');
       assert.deepEqual(approved.acceptanceCriteria, ['Uno', 'Dos']);
       assert.equal((await t.david.act('SCR-0002', 'assign', { developerId: 'team-edwin' })).status, 409, 'exige reevaluar la aprobación heredada');
+      assert.deepEqual(list[0].modules, ['Cooperativas'], 'el módulo único anterior se presenta como lista');
       assert.equal((await t.david.act('CRF-000002', 'reevaluate', { reason: 'Completar rollout y backout.' })).status, 200);
       await t.leslie.ok('CRF-000003', 'clarification', { note: 'Detalle aportado.' });
       assert.ok((await t.david.call('/api/audit?action=Migración')).data.events.length >= 3);
@@ -486,4 +445,118 @@ test('equipo y persistencia: sincronización de cuentas y datos conservados al r
       assert.equal(r.status, 'En validación'); assert.equal(r.previousEvaluations[0].member, 'María'); assert.equal(r.evaluation, null);
     } finally { await stop(app); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---------- GitHub (API simulada) ----------
+function mockGithub() {
+  const state = { issues: [], comments: [], calls: [], pulls: { 4: { number: 4, title: 'Cancelación de boletos', state: 'closed', merged_at: '2026-11-20T10:00:00Z', head: { ref: 'feature/x' }, base: { ref: 'main' } }, 5: { number: 5, title: 'Ajuste', state: 'open', merged_at: null, draft: false, head: { ref: 'fix' }, base: { ref: 'main' } } } };
+  const send = (res, status, data) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(data === undefined ? '' : JSON.stringify(data)); };
+  const server = http.createServer(async (req, res) => {
+    let body = ''; for await (const c of req) body += c;
+    const data = body ? JSON.parse(body) : null, url = decodeURIComponent(req.url);
+    state.calls.push({ method: req.method, url, data, auth: req.headers.authorization, agent: req.headers['user-agent'] });
+    if (req.headers.authorization !== 'Bearer test-token') return send(res, 401, { message: 'Bad credentials' });
+    const base = '/repos/org/busesuta';
+    if (url === base) return send(res, 200, { full_name: 'org/busesuta', default_branch: 'main', private: true, html_url: 'https://github.com/org/busesuta', has_issues: true, permissions: { push: true } });
+    if (url === `${base}/branches/feature/x`) return send(res, 200, { name: 'feature/x', commit: { sha: 'a'.repeat(40) }, _links: { html: 'https://github.com/org/busesuta/tree/feature/x' } });
+    if (url === `${base}/commits/abc1234`) return send(res, 200, { sha: 'abc1234' + '0'.repeat(33), html_url: 'https://github.com/org/busesuta/commit/abc1234', commit: { message: 'Cancelación\n\ndetalle', author: { name: 'Edwin', date: '2026-11-20T09:00:00Z' } } });
+    const pr = /\/pulls\/(\d+)$/.exec(url);
+    if (pr && state.pulls[pr[1]]) return send(res, 200, { ...state.pulls[pr[1]], html_url: `https://github.com/org/busesuta/pull/${pr[1]}` });
+    if (url === `${base}/git/ref/tags/v1.3.0`) return send(res, 200, { object: { sha: 'b'.repeat(40) } });
+    if (url === `${base}/issues` && req.method === 'POST') { const issue = { number: state.issues.length + 1, html_url: `https://github.com/org/busesuta/issues/${state.issues.length + 1}`, state: 'open', created_at: '2026-11-19T00:00:00Z', ...data, labels: data.labels.map(name => ({ name })) }; state.issues.push(issue); return send(res, 201, issue); }
+    const issue = /\/issues\/(\d+)(\/comments)?$/.exec(url);
+    if (issue) {
+      const it = state.issues[Number(issue[1]) - 1];
+      if (!it) return send(res, 404, { message: 'Not Found' });
+      if (issue[2] && req.method === 'POST') { state.comments.push({ issue: it.number, body: data.body }); return send(res, 201, { id: state.comments.length }); }
+      if (req.method === 'PATCH') { Object.assign(it, data, { labels: data.labels.map(name => ({ name })) }); return send(res, 200, it); }
+      return send(res, 200, it);
+    }
+    return send(res, 404, { message: 'Not Found' });
+  });
+  return { state, server };
+}
+test('GitHub: issue por CRF sincronizada con el flujo y verificación de referencias', async () => {
+  const gh = mockGithub();
+  await new Promise(resolve => gh.server.listen(0, '127.0.0.1', resolve));
+  const apiUrl = `http://127.0.0.1:${gh.server.address().port}`;
+  const app = await start(':memory:', { github: createGithub({ repo: 'org/busesuta', token: 'test-token', apiUrl }), appUrl: 'http://cambios.example' });
+  try {
+    const anon = await client(app), t = await team(app);
+    const status = (await t.edwin.call('/api/github/status')).data;
+    assert.equal(status.configured, true); assert.equal(status.reachable, true); assert.equal(status.canCreateIssues, true);
+    // Una solicitud sin cuenta crea su issue sin datos personales del solicitante.
+    const pub = (await anon.call('/api/public/requests', 'POST', { ...userCrf, name: 'Visitante Privado', email: 'privado@example.com' })).data.receipt;
+    const first = gh.state.issues[0];
+    assert.equal(first.title, `[${pub.id}] Cancelar boletos`);
+    assert.doesNotMatch(first.body, /privado@example\.com|Visitante Privado/);
+    assert.match(first.body, /Reservas y pasajeros/); assert.match(first.body, /http:\/\/cambios\.example\/#detalle\/CRF-000001/);
+    assert.deepEqual(first.labels.map(l => l.name).sort(), ['control-de-cambios', 'estado: registrada', 'módulo: reservas y pasajeros']);
+    assert.ok(gh.state.calls.every(c => c.agent === 'changeflow-uta'));
+    // CRF técnico: issue enlazada en el expediente y sincronizada en cada hito.
+    const created = (await t.leslie.call('/api/requests', 'POST', devCrf())).data.request;
+    assert.equal(created.github.issue.number, 2); assert.equal(created.github.issue.url, 'https://github.com/org/busesuta/issues/2');
+    const id = created.id;
+    await t.david.ok(id, 'receive');
+    assert.ok(gh.state.issues[1].labels.some(l => l.name === 'estado: en validación'));
+    assert.match(gh.state.comments.at(-1).body, /Recepción del CRF/);
+    await t.david.ok(id, 'validate');
+    const before = gh.state.comments.length;
+    await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'draft' });
+    assert.equal(gh.state.comments.length, before, 'un borrador no comenta la issue');
+    await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'planning' });
+    await t.david.ok(id, 'decision', { decision: 'Aprobado', justification: 'Cambio acotado y viable.' });
+    await t.david.ok(id, 'assign', { developerId: 'team-edwin' });
+    await t.edwin.ok(id, 'start');
+    assert.ok(gh.state.issues[1].labels.some(l => l.name === 'estado: en implementación'));
+    // Verificación real de referencias.
+    const branch = await t.edwin.ok(id, 'git', { kind: 'Rama', value: 'feature/x' });
+    assert.equal(branch.gitRefs[0].verified, true); assert.equal(branch.gitRefs[0].verification.details.sha, 'a'.repeat(40));
+    const missingBranch = await t.edwin.act(id, 'git', { kind: 'Rama', value: 'no-existe' });
+    assert.equal(missingBranch.status, 400); assert.equal(missingBranch.data.field, 'value'); assert.match(missingBranch.data.error, /no existe en org\/busesuta/);
+    const otherRepo = await t.edwin.act(id, 'git', { kind: 'Pull request', value: '#4', url: 'https://github.com/otro/repo/pull/4' });
+    assert.equal(otherRepo.status, 400); assert.equal(otherRepo.data.field, 'url');
+    const merged = await t.edwin.ok(id, 'git', { kind: 'Pull request', value: '#4' });
+    assert.equal(merged.gitRefs.at(-1).verification.details.state, 'fusionado'); assert.equal(merged.gitRefs.at(-1).url, 'https://github.com/org/busesuta/pull/4');
+    assert.equal((await t.edwin.ok(id, 'git', { kind: 'Commit', value: 'abc1234' })).gitRefs.at(-1).verification.details.message, 'Cancelación');
+    assert.equal((await t.edwin.ok(id, 'git', { kind: 'Versión o tag', value: 'v1.3.0' })).gitRefs.at(-1).verified, true);
+    const open = await t.edwin.ok(id, 'git', { kind: 'Pull request', value: '#5' });
+    assert.equal(open.gitRefs.at(-1).verification.details.state, 'abierto');
+    gh.state.pulls[5] = { ...gh.state.pulls[5], state: 'closed', merged_at: '2026-11-21T00:00:00Z' };
+    const refreshed = await t.pablo.ok(id, 'git-refresh', { refId: open.gitRefs.at(-1).id });
+    assert.equal(refreshed.gitRefs.at(-1).verification.details.state, 'fusionado');
+    // El cierre cierra la issue; un rechazo la cierra como «no planificada».
+    await t.edwin.ok(id, 'module-change', { module: 'Reservas y pasajeros', operation: 'Modificación', description: 'Cancelación.' });
+    await t.edwin.ok(id, 'activity', { description: 'Implementación', hours: 3 });
+    await t.edwin.ok(id, 'send-to-tests');
+    await t.pablo.ok(id, 'test', { name: 'Cancelar', expected: 'OK', obtained: 'OK', status: 'Superada' });
+    await t.pablo.ok(id, 'finish-tests', { outcome: 'Todas superadas' });
+    await t.pablo.ok(id, 'review', { summary: 'Conforme con lo autorizado.', rolloutCompliance: 'Cumplido', criteria: (await t.pablo.call(`/api/requests/${id}`)).data.reviewCriteria.map(() => ({ met: true })), recommendation: 'Cerrar.', decision: 'Conforme' });
+    await t.edwin.ok(id, 'close', { result: 'Exitoso', summary: 'Cancelación disponible.' });
+    assert.equal(gh.state.issues[1].state, 'closed'); assert.equal(gh.state.issues[1].state_reason, 'completed');
+    assert.ok(gh.state.issues[1].labels.some(l => l.name === 'estado: cerrada'));
+    await t.david.ok(pub.id, 'receive'); await t.david.ok(pub.id, 'validate');
+    await t.david.ok(pub.id, 'evaluation', { ...fullPlan(), step: 'analysis' });
+    await t.david.ok(pub.id, 'decision', { decision: 'Rechazado', justification: 'No es prioritario este semestre.' });
+    await t.david.ok(pub.id, 'close-rejected', {});
+    assert.equal(gh.state.issues[0].state, 'closed'); assert.equal(gh.state.issues[0].state_reason, 'not_planned');
+    // Solo el CCC puede forzar la sincronización.
+    assert.equal((await t.edwin.call(`/api/requests/${id}/github-issue`, 'POST', {})).status, 403);
+    assert.equal((await t.david.call(`/api/requests/${id}/github-issue`, 'POST', {})).status, 200);
+  } finally { await stop(app); await new Promise(resolve => gh.server.close(resolve)); }
+});
+test('GitHub no disponible: la solicitud se registra y la issue puede reintentarse', async () => {
+  const app = await start(':memory:', { github: createGithub({ repo: 'org/busesuta', token: 'test-token', apiUrl: 'http://127.0.0.1:9', timeoutMs: 1500 }) });
+  try {
+    const t = await team(app);
+    const r = await t.leslie.call('/api/requests', 'POST', devCrf());
+    assert.equal(r.status, 201, 'GitHub caído no impide registrar el CRF');
+    assert.equal(r.data.request.github.lastSync.ok, false); assert.equal(r.data.request.github.issue, undefined);
+    const retry = await t.david.call(`/api/requests/${r.data.request.id}/github-issue`, 'POST', {});
+    assert.equal(retry.status, 502); assert.match(retry.data.error, /GitHub/);
+    // Sin token no se intentan issues, pero se informa el estado.
+    const noToken = createGithub({ repo: 'org/busesuta' });
+    assert.equal(noToken.canIssue(), false);
+    assert.equal((await createGithub({}).verify('Rama', 'main')).status, 'sin configurar');
+  } finally { await stop(app); }
 });

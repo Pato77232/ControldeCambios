@@ -1,6 +1,6 @@
 # Transviajes · Control de cambios de BusesUTA
 
-Aplicación académica de la asignatura **Manejo y Configuración del Software** (UTA). Simula de principio a fin el control de cambios de **BusesUTA**, una aplicación de venta de pasajes interprovinciales: solicitud (CRF), análisis, planificación, autorización, asignación, implementación, pruebas, revisión postimplementación y cierre. Incluye además un catálogo de ICS, líneas base, auditoría y reportes.
+Aplicación académica de la asignatura **Manejo y Configuración del Software** (UTA). Simula de principio a fin el control de cambios de **BusesUTA**, una aplicación de venta de pasajes interprovinciales: solicitud (CRF), análisis, planificación, autorización, asignación, implementación, pruebas, revisión postimplementación y cierre. Incluye además auditoría, reportes e integración con GitHub (una issue por solicitud y verificación de referencias).
 
 Esta aplicación administra las solicitudes; no implementa funciones de BusesUTA como la compra de boletos o los pagos. Es una simulación académica sustentada en buenas prácticas de ACS e ITIL, no una implementación certificada de esos marcos.
 
@@ -10,7 +10,8 @@ El documento [docs/proceso-acs.md](docs/proceso-acs.md) contiene el proceso ACS,
 
 - **Backend:** Node.js 22.13 o superior (`node:http`, `node:sqlite`, `node:crypto`), sin dependencias externas.
 - **Frontend:** HTML, CSS y JavaScript sin framework, servidos por el mismo proceso.
-- **Base de datos:** SQLite con transacciones, claves foráneas, restricciones únicas y disparadores que protegen la auditoría, las revisiones y las líneas base aprobadas.
+- **Base de datos:** SQLite con transacciones, claves foráneas y disparadores que impiden modificar o borrar la auditoría.
+- **GitHub (opcional):** API REST de GitHub para crear una issue por solicitud y verificar ramas, commits, pull requests y tags. Ver [docs/github.md](docs/github.md).
 
 Verificado con Node.js 24 y 25. Algunas versiones muestran una advertencia experimental de SQLite.
 
@@ -60,22 +61,22 @@ npm run accounts:sync
 | `leslie@uta.edu.ec`, `edwin@uta.edu.ec`, `pablo@uta.edu.ec`, `shirley@uta.edu.ec` | Desarrolladores |
 
 - **Usuario final:** presenta solicitudes sin cuenta. Recibe un código `CRF-000001` y una **clave de seguimiento** para consultar el estado y responder al CCC en **Seguimiento**. El rol `usuario` con cuenta sigue admitido por el modelo.
-- **Desarrollador:** presenta CRF técnicos, propone ICS, implementa lo que se le asigna, registra pruebas y revisiones y cierra las solicitudes asignadas.
-- **CCC:** recibe, valida, clasifica, analiza, planifica, autoriza, asigna, decide las desviaciones de alcance, gestiona ICS y líneas base, y puede reabrir solicitudes.
+- **Desarrollador:** presenta CRF técnicos, implementa lo que se le asigna, registra pruebas y revisiones y cierra las solicitudes asignadas.
+- **CCC:** recibe, valida, clasifica, analiza, planifica, autoriza, asigna, decide las desviaciones de alcance y puede reabrir solicitudes.
 
 Concentrar análisis y autorización en el CCC es una simplificación académica deliberada; no existe un rol de gestor del cambio. El único miembro del CCC no puede presentar solicitudes, porque nadie podría evaluarlas de forma independiente. La matriz completa está en la documentación.
 
 ## Funcionalidades
 
-- **CRF de usuario final y técnico** con una estructura compartida. El servidor genera el código, la fecha y la identidad; estos datos no aparecen como campos del formulario. La casilla «La funcionalidad solicitada todavía no existe» distingue una funcionalidad nueva de un error o ajuste. El formulario técnico añade el tipo de modificación (adición/modificación/eliminación), los ICS potencialmente afectados (del catálogo o sugeridos), entorno, versiones (o «No determinada»), spec, reglas de negocio y criterios de aceptación. El solicitante no lo modifica después de la recepción; el CCC puede corregir cualquier campo indicando el motivo, y los datos originales se conservan.
+- **CRF de usuario final y técnico** con una estructura compartida. El servidor genera el código, la fecha y la identidad; estos datos no aparecen como campos del formulario. La casilla «La funcionalidad solicitada todavía no existe» distingue una funcionalidad nueva de un error o ajuste. El formulario técnico añade el tipo de modificación (adición/modificación/eliminación), los componentes técnicos afectados, entorno, versiones (o «No determinada»), spec, reglas de negocio y criterios de aceptación. El solicitante no lo modifica después de la recepción; el CCC puede corregir cualquier campo indicando el motivo, y los datos originales se conservan.
 - **Ficha única del CCC** (secciones A–E): clasificación ITIL estándar/normal/emergencia, impacto técnico y funcional, riesgos, urgencia, prioridad (con una sugerencia orientativa), viabilidad, esfuerzo y duración, rollout, backout, plan de pruebas, inactividad, fecha y versión objetivo. Permite guardar borradores, y la decisión forma parte de la misma ficha.
 - **Decisiones coherentes:** aprobar exige un análisis y una planificación completos. Un cambio no viable no puede aprobarse: el sistema informa el error. Las condiciones incluyen su forma de verificación. «Más información» no es un rechazo. Las reevaluaciones conservan las decisiones anteriores.
-- **Implementación por rondas** con actividades, referencias de GitHub registradas manualmente (no verificadas), ICS realmente modificados con revisión anterior y nueva, y desviaciones de alcance que el CCC debe autorizar.
-- **Pruebas** cuyas ejecuciones se conservan. Las fallidas devuelven la solicitud a correcciones.
+- **Módulos afectados:** el solicitante marca uno o varios módulos de BusesUTA en tarjetas seleccionables; el CCC los confirma con la operación prevista y la decisión autoriza esos módulos.
+- **Implementación por rondas** con actividades, módulos realmente modificados y desviaciones de alcance que el CCC debe autorizar cuando se toca un módulo no autorizado.
+- **GitHub:** cada solicitud crea una issue que se actualiza en cada hito y se cierra con el CRF. Las referencias de Git se verifican en el repositorio antes de registrarlas.
+- **Pruebas, revisión y cierre** en una sola sección del expediente. Las ejecuciones de prueba se conservan y las fallidas devuelven la solicitud a correcciones.
 - **Revisión postimplementación**, **backout ejecutado** (documentado, no simulado) y **cierre** exitoso, fallido o incompleto, separado del resultado de autorización y del administrativo. El CCC puede reabrir una solicitud cerrada.
-- **Catálogo de ICS** (`ICS-BUS-###`): categorías configurables, objetos básicos y agregados, jerarquía sin ciclos, dependencias, revisiones inmutables y trazabilidad con las solicitudes.
-- **Líneas base** (`LB-BUS-###`): borrador → revisión → aprobada o rechazada. La composición aprobada queda congelada y se pueden crear líneas base derivadas.
-- **Auditoría persistente** de solo inserción, una vista de auditoría de configuración por solicitud, un panel por rol y **reportes** con filtros, gráficos, métricas calculadas con datos reales y exportación a CSV.
+- **Auditoría persistente** de solo inserción, un panel por rol y **reportes** con filtros, gráficos, métricas calculadas con datos reales y exportación a CSV.
 - **Adjuntos reales** (5 archivos de 2 MB por envío, extensiones permitidas), guardados fuera de la carpeta pública y descargables solo con permiso.
 
 ## API principal
@@ -89,12 +90,11 @@ Las rutas autenticadas que modifican datos requieren el encabezado `X-CSRF-Token
 | `POST /api/public/track` · `/api/public/track/clarification` | Consulta limitada y respuesta del solicitante sin cuenta (código y clave) |
 | `POST /api/auth/login` · `GET /api/auth/me` · `POST /api/auth/logout` | Sesión |
 | `GET /api/requests` · `POST /api/requests` | Listado visible según el rol · crear CRF |
-| `GET /api/requests/:id` | Expediente con ICS, adjuntos, auditoría y auditoría de configuración |
+| `GET /api/requests/:id` | Expediente con adjuntos, eventos de auditoría y módulos autorizados |
 | `PATCH` / `DELETE /api/requests/:id` | Editar o eliminar un CRF propio aún no recibido; el CCC corrige con `PATCH` y `correctionReason` |
-| `POST /api/requests/:id/:acción` | `receive`, `validate`, `request-info`, `clarification`, `evaluation` (`step`: draft/analysis/planning), `decision`, `reevaluate`, `assign`, `start`, `activity`, `git`, `ics-change`, `deviation`, `scope`, `send-to-tests`, `test`, `finish-tests`, `backout`, `review`, `close`, `close-rejected`, `reopen` |
+| `POST /api/requests/:id/:acción` | `receive`, `validate`, `request-info`, `clarification`, `evaluation` (`step`: draft/analysis/planning), `decision`, `reevaluate`, `assign`, `start`, `git-refresh`, `module-change`, `activity`, `git`, `deviation`, `scope`, `send-to-tests`, `test`, `finish-tests`, `backout`, `review`, `close`, `close-rejected`, `reopen` |
 | `POST /api/requests/:id/attachments` · `GET /api/attachments/:id` | Subir y descargar archivos |
-| `GET`/`POST /api/ics`, `GET`/`PATCH /api/ics/:código`, `POST /api/ics/:código/revisions`, `POST`/`DELETE /api/ics/:código/relations` | Catálogo de ICS |
-| `GET`/`POST /api/baselines`, `POST /api/baselines/:código/(items\|submit\|decide\|delete)` | Líneas base |
+| `POST /api/requests/:id/github-issue` · `GET /api/github/status` | Crear o sincronizar la issue (CCC) · estado de la conexión con GitHub |
 | `GET /api/reports` · `GET /api/reports.csv` · `GET /api/audit` | Reportes, CSV y auditoría |
 
 No existe una ruta para fijar el estado libremente. El código, la identidad, los roles, las fechas, el estado y los responsables nunca se toman del cliente.
@@ -134,7 +134,7 @@ backend/
   migrate.cjs         Conversión de documentos al modelo 4
   catalog.cjs         Catálogos compartidos
   service.cjs         CRF, ficha del CCC y flujo completo con permisos
-  ics.cjs             ICS, revisiones, relaciones y líneas base
+  github.cjs          Issues y verificación de referencias en GitHub
   reports.cjs         Indicadores, métricas y CSV
   audit.cjs           Auditoría de solo inserción
   files.cjs           Adjuntos
