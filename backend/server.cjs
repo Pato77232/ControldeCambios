@@ -88,13 +88,6 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
         catch (e) { if (e.status === 404) attempt.add(); throw e; }
         return;
       }
-      if (route === '/api/public/dashboard' && method === 'GET') {
-        // Solo totales agregados: sin datos personales ni contenido de los expedientes.
-        const statuses = db.prepare("SELECT json_extract(document,'$.status') AS status, COUNT(*) AS n FROM requests GROUP BY status").all();
-        const by = Object.fromEntries(statuses.map(s => [s.status, Number(s.n)]));
-        const sum = list => list.reduce((n, s) => n + (by[s] || 0), 0);
-        json(200, { counts: { total: statuses.reduce((n, s) => n + Number(s.n), 0), review: sum(['Registrada', 'En validación', 'Pendiente de información', 'En análisis', 'En planificación', 'Pendiente de aprobación']), progress: sum(['Aprobada', 'Aprobada con condiciones', 'Asignada', 'En implementación', 'En pruebas', 'En revisión', 'Correcciones requeridas']), closed: sum(['Cerrada']), rejected: sum(['Rechazada']) } }); return;
-      }
       // ---------- Rutas con sesión ----------
       const session = getSession(db, req); if (!session) fail(401, 'Inicia sesión para continuar.');
       if (mutation && req.headers['x-csrf-token'] !== session.csrf) fail(403, 'Sesión de formulario inválida. Actualiza la página.');
@@ -157,7 +150,7 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
       const status = error instanceof HttpError ? error.status : sqliteRule ? 409 : 500;
       if (status === 500) console.error(error);
       const message = status === 500 ? 'No se pudo completar la operación.' : sqliteRule ? `Regla de integridad: ${String(error.message).replace(/^.*?:\s*/, '')}` : error.message;
-      if (!res.headersSent) json(status, { error: message }); else res.end();
+      if (!res.headersSent) json(status, { error: message, ...(error?.field && status < 500 ? { field: error.field } : {}) }); else res.end();
     }
   });
   server.on('close', () => db.close());

@@ -9,7 +9,7 @@ const PASSWORD = 'Test-ChangeFlow-2026!';
 function dom() {
   const nodes = new Map();
   const node = id => {
-    if (!nodes.has(id)) nodes.set(id, { id, value: '', textContent: '', innerHTML: '', hidden: false, dataset: {}, elements: [], files: [], classList: { toggle() {} }, setAttribute() {}, removeAttribute() {}, addEventListener() {}, focus() {}, querySelector: sel => node(`${id} ${sel}`), querySelectorAll: () => [], showModal() {}, scrollIntoView() {} });
+    if (!nodes.has(id)) nodes.set(id, { id, value: '', textContent: '', innerHTML: '', hidden: false, dataset: {}, elements: [], files: [], classList: { toggle() {} }, setAttribute() {}, removeAttribute() {}, getAttribute: () => null, closest: () => null, addEventListener() {}, focus() {}, querySelector: sel => node(`${id} ${sel}`), querySelectorAll: () => [], showModal() {}, scrollIntoView() {} });
     return nodes.get(id);
   };
   return { nodes, node };
@@ -36,9 +36,11 @@ function dom() {
       const show = async hash => { run(`location.hash = ${JSON.stringify(hash)}; route();`); await new Promise(r => setImmediate(r)); await new Promise(r => setTimeout(r, 60)); return html(); };
       const nav = () => node('.app-nav').innerHTML;
       if (role === 'invitado') {
-        assert.match(nav(), /Seguimiento/); assert.doesNotMatch(nav(), /Catálogo de ICS/);
+        assert.match(nav(), /Seguimiento/); assert.doesNotMatch(nav(), /Catálogo de ICS|data-nav="panel"/);
+        const start = await show('#panel');
+        assert.match(start, /login-form/, 'sin sesión se inicia en el login'); assert.doesNotMatch(start, /stat-value/, 'no se muestra el panel');
         const form = await show('#nueva');
-        assert.match(form, /CRF\) · Usuario final/); assert.doesNotMatch(form, /modificationType/); assert.match(form, /id="f-name"[^>]*required/); assert.doesNotMatch(form, /id="f-name"[^>]*readonly/);
+        assert.match(form, /CRF\) · Usuario final/); assert.doesNotMatch(form, /modificationType/); assert.match(form, /id="f-name"[^>]*required/); assert.doesNotMatch(form, /id="f-code"|id="f-created"|id="f-project"/, 'los datos automáticos no se muestran como campos');
         assert.doesNotMatch(form, /itilType|rolloutSteps|developerId/, 'el usuario final no fija datos internos');
         assert.match(await show('#seguimiento'), /Clave de seguimiento/);
         assert.match(await show('#detalle/CRF-000001'), /Iniciar sesión|login/);
@@ -46,7 +48,9 @@ function dom() {
         assert.match(nav(), /Catálogo de ICS/); assert.match(nav(), /Auditoría/); assert.doesNotMatch(nav(), /Nueva solicitud/);
         assert.match(await show('#nueva'), /no puede presentarlas/);
         const d4 = await show('#detalle/CRF-000004');
-        assert.match(d4, /Recibir solicitud/); assert.match(d4, /Solicitud original/);
+        assert.match(d4, /Recibir solicitud/); assert.match(d4, /Solicitud original/); assert.match(d4, /case-nav/); assert.match(d4, /Corregir CRF/);
+        const fix = await show('#editar/CRF-000004');
+        assert.match(fix, /Motivo de la corrección/); assert.match(fix, /class="ics-picker"/);
         const d1 = await show('#detalle/CRF-000001');
         assert.match(d1, /Reabrir solicitud/); assert.match(d1, /Auditoría de configuración/); assert.match(d1, /Registrado manualmente; no verificado/);
         assert.doesNotMatch(d1, /Registrar ejecución de prueba/);
@@ -61,7 +65,7 @@ function dom() {
       } else {
         assert.match(nav(), /Nueva solicitud/); assert.match(nav(), /Catálogo de ICS/);
         const form = await show('#nueva');
-        assert.match(form, /Propuesta técnica/); assert.match(form, /id="f-name"[^>]*readonly/); assert.match(form, /data-group="suggestedIcs"/);
+        assert.match(form, /Propuesta técnica/); assert.match(form, /identity-note/); assert.doesNotMatch(form, /id="f-name"|id="f-code"/); assert.match(form, /class="ics-card/); assert.match(form, /data-version/);
         assert.match(await show('#ficha/CRF-000001'), /Ficha no disponible/);
         const d = await show('#detalle/CRF-000001');
         assert.doesNotMatch(d, /Reabrir solicitud|Decidir la autorización/);

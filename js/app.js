@@ -58,7 +58,7 @@ async function api(path, { method = 'GET', body } = {}) {
   const result = await response.json();
   if (!response.ok) {
     if (response.status === 401 && !['/auth/login', '/auth/me'].includes(path)) { currentUser = null; csrfToken = ''; store = { requests: [] }; renderSession(); location.hash = 'login'; route(); }
-    const error = new Error(result.error || 'No se pudo completar la operación.'); error.status = response.status; throw error;
+    const error = new Error(result.error || 'No se pudo completar la operación.'); error.status = response.status; error.field = result.field; throw error;
   }
   return result;
 }
@@ -83,7 +83,12 @@ async function saveAction(path, body, method = 'POST', form = null) {
     if (result.store) { store = result.store; setNavCount(); }
     return result;
   } catch (error) {
-    if (alert) { alert.textContent = error.message; alert.focus?.(); }
+    if (alert) alert.textContent = error.message;
+    // El servidor indica el campo con error: se marca en rojo y se lleva la vista hasta él.
+    if (form && error.field) {
+      const el = form.querySelector(`[name="${error.field}"]`) || form.querySelector(`[data-group="${error.field}"]`)?.closest('.ics-picker');
+      if (el) { markField(form, el, error.message); el.scrollIntoView?.({ block: 'center', behavior: 'smooth' }); el.focus?.({ preventScroll: true }); }
+    } else alert?.focus?.();
     toast(error.message, true);
     if (error.status === 409 && /cambió/.test(error.message)) { try { await loadStore(); } catch { /* se reintenta con Actualizar */ } }
     return null;
@@ -103,9 +108,9 @@ async function readFiles(input) {
 
 // ---------- Formularios ----------
 // fld: control con etiqueta, ayuda y mensaje de error asociado (id = prefijo-nombre).
-function fld(name, label, { value = '', type = 'text', required = false, options: opts, area = false, hint = '', full = false, readonly = false, placeholder = '', min, max, step, prefix = 'f', rows = 3, maxlength } = {}) {
+function fld(name, label, { value = '', type = 'text', required = false, options: opts, area = false, hint = '', full = false, readonly = false, placeholder = '', min, max, step, prefix = 'f', rows = 3, maxlength, attrs: extra = '' } = {}) {
   const id = `${prefix}-${name}`;
-  const attrs = `id="${id}" name="${name}" aria-describedby="${id}-error${hint ? ` ${id}-hint` : ''}" ${required ? 'required' : ''} ${readonly ? 'readonly' : ''} ${placeholder ? `placeholder="${esc(placeholder)}"` : ''}`;
+  const attrs = `id="${id}" name="${name}" aria-describedby="${id}-error${hint ? ` ${id}-hint` : ''}" ${required ? 'required' : ''} ${readonly ? 'readonly' : ''} ${placeholder ? `placeholder="${esc(placeholder)}"` : ''} ${extra}`;
   let control;
   if (opts) control = `<select ${attrs}>${options(opts, value, 'Selecciona una opción')}</select>`;
   else if (area) control = `<textarea ${attrs} rows="${rows}" maxlength="${maxlength || 5000}">${esc(Array.isArray(value) ? value.join('\n') : value)}</textarea>`;
@@ -132,27 +137,84 @@ function collect(form) {
   }
   return d;
 }
-// Validación en el cliente (obligatorios, correo, longitudes mínimas); el servidor vuelve a validar todo.
+// Versiones semánticas: mismo criterio que el servidor.
+const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const semverCmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+function versionError(value, { allow = [], gt } = {}) {
+  if (!value || allow.includes(value)) return '';
+  if (!SEMVER_RE.test(value) || value.split('.').some(n => n.length > 6)) return `Usa el formato MAJOR.MINOR.PATCH, por ejemplo 1.4.0${allow.length ? ` (o «${allow.join('» / «')}»)` : ''}.`;
+  if (gt && SEMVER_RE.test(gt) && semverCmp(value, gt) <= 0) return `Debe ser mayor que la versión actual ${gt}.`;
+  return '';
+}
+const versionAttr = rule => `data-version='${esc(JSON.stringify(rule))}'`;
+// Error de un control según sus reglas (obligatorio, correo, longitud mínima, versión).
+function fieldError(el) {
+  if (!el || el.disabled || el.type === 'radio' || el.type === 'checkbox' || el.type === 'file') return '';
+  const value = String(el.value || '').trim();
+  if (el.required && !value) return 'Este campo es obligatorio.';
+  if (el.type === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)) return 'Ingresa un correo válido.';
+  if (el.minLength > 0 && value && value.length < el.minLength) return `Escribe al menos ${el.minLength} caracteres.`;
+  if (el.dataset?.version) { let rule = {}; try { rule = JSON.parse(el.dataset.version); } catch { /* sin regla */ } if (rule.gtFrom) rule.gt = el.form?.querySelector(`[name="${rule.gtFrom}"]`)?.value.trim(); return versionError(value, rule); }
+  return '';
+}
+const errorKey = el => el.dataset?.err || el.id;
+// Dibuja el campo en rojo y muestra el mensaje junto a él.
+function markField(form, el, message) {
+  const key = errorKey(el), holder = key ? form.querySelector(`#${key}-error`) : null;
+  if (holder) holder.textContent = message;
+  el.setAttribute('aria-invalid', 'true');
+  el.closest('.field, .choice-field')?.classList.add('invalid');
+}
+function clearField(form, el) {
+  const key = errorKey(el), holder = key ? form.querySelector(`#${key}-error`) : null;
+  if (holder) holder.textContent = '';
+  el.removeAttribute('aria-invalid');
+  el.closest('.field, .choice-field')?.classList.remove('invalid');
+}
+// Validación en el cliente antes de enviar; el servidor vuelve a validar todo.
 function validate(form, extra = {}) {
   const errors = { ...extra };
   for (const el of form.elements) {
     if (!el.name || el.disabled || !el.id) continue;
-    const value = el.type === 'radio' ? (form.querySelector(`input[name="${el.name}"]:checked`)?.value || '') : String(el.value || '').trim();
-    const key = el.dataset.err || el.id;
-    if (el.required && !value && !errors[key]) errors[key] = 'Este campo es obligatorio.';
-    else if (el.type === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)) errors[key] = 'Ingresa un correo válido.';
-    else if (el.minLength > 0 && value && value.length < el.minLength) errors[key] = `Escribe al menos ${el.minLength} caracteres.`;
+    const key = errorKey(el);
+    if (errors[key]) continue;
+    if (el.type === 'radio') { if (el.required && !form.querySelector(`input[name="${el.name}"]:checked`)) errors[key] = 'Selecciona una opción.'; continue; }
+    const message = fieldError(el);
+    if (message) errors[key] = message;
   }
   form.querySelectorAll('.error:not(.form-alert)').forEach(el => el.textContent = '');
   form.querySelectorAll('[aria-invalid]').forEach(el => el.removeAttribute('aria-invalid'));
+  form.querySelectorAll('.invalid').forEach(el => el.classList.remove('invalid'));
   for (const [id, message] of Object.entries(errors)) {
-    const holder = form.querySelector(`#${id}-error`), control = form.querySelector(`#${id}`);
-    if (holder) holder.textContent = message;
-    control?.setAttribute('aria-invalid', 'true');
+    const control = form.querySelector(`#${id}`);
+    if (control) markField(form, control, message);
+    else { const holder = form.querySelector(`#${id}-error`); if (holder) holder.textContent = message; }
   }
   const first = Object.keys(errors)[0];
-  if (first) { form.querySelector(`#${first}`)?.focus(); const alert = form.querySelector('.form-alert'); if (alert) alert.textContent = 'Revisa los campos marcados para continuar.'; return false; }
+  if (first) { const el = form.querySelector(`#${first}`); el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' }); el?.focus?.({ preventScroll: true }); const alert = form.querySelector('.form-alert'); if (alert) alert.textContent = 'Revisa los campos marcados en rojo.'; return false; }
   return true;
+}
+// Selector visual de ICS: tarjetas con búsqueda, estado y contador de seleccionados.
+function icsPicker({ group, id = '', items = ICS.items.filter(i => i.status !== 'Retirado'), checked = () => false, value = i => i.id, operation = null, note = () => '', empty = 'Todavía no hay ICS catalogados.' }) {
+  if (!items.length) return `<div class="ics-empty" ${id ? `id="${id}"` : ''}>${icon('cube')}<p>${esc(empty)}</p></div>`;
+  return `<div class="ics-picker" ${id ? `id="${id}" tabindex="-1"` : ''} data-picker><div class="ics-picker-bar"><div class="search">${icon('search')}<input type="search" data-picker-search placeholder="Filtrar por código, nombre o categoría…" aria-label="Filtrar ICS"></div><span class="ics-count" data-picker-count aria-live="polite"></span></div><div class="ics-grid">${items.map(i => {
+    const on = checked(i), extra = note(i);
+    return `<div class="ics-card${on ? ' selected' : ''}" data-search="${esc(`${i.code} ${i.name} ${i.category} ${i.status}`.toLowerCase())}"><label class="ics-card-main"><input type="checkbox" class="ics-check" data-group="${group}" value="${esc(value(i))}" ${on ? 'checked' : ''}><span class="ics-tick" aria-hidden="true">${icon('check')}</span><span class="ics-card-body"><span class="ics-card-top"><code class="ics-code">${esc(i.code)}</code>${badge(i.status)}</span><strong class="ics-name">${esc(i.name)}</strong><small class="ics-meta">${icon(i.kind === 'Agregado' ? 'layers' : 'cube')} ${esc(i.category)} · ${esc(i.kind)}${i.currentRevision ? ` · rev. ${esc(i.currentRevision)}` : ''}</small>${extra ? `<small class="ics-note">${esc(extra)}</small>` : ''}</span></label>${operation ? `<label class="ics-op"><span>Operación</span><select name="op-${i.id}" aria-label="Operación prevista para ${esc(i.code)}">${options(CAT.OPERATIONS, operation(i) || 'Modificación')}</select></label>` : ''}</div>`;
+  }).join('')}</div></div>`;
+}
+function bindPickers() {
+  document.querySelectorAll('[data-picker]').forEach(p => {
+    const cards = [...p.querySelectorAll('.ics-card')], count = p.querySelector('[data-picker-count]');
+    const update = () => {
+      let n = 0;
+      cards.forEach(c => { const on = c.querySelector('.ics-check').checked; n += on; c.classList.toggle('selected', on); });
+      if (count) count.textContent = n ? `${n} seleccionado${n === 1 ? '' : 's'}` : 'Ninguno seleccionado';
+      if (n && p.getAttribute('aria-invalid') === 'true') { const form = p.closest('form'); if (form) clearField(form, p); }
+    };
+    p.addEventListener('change', update); update();
+    const search = p.querySelector('[data-picker-search]');
+    search?.addEventListener('input', () => { const q = search.value.trim().toLowerCase(); cards.forEach(c => c.hidden = !!q && !c.dataset.search.includes(q)); });
+  });
 }
 function bindForm(selector, handler) {
   const form = document.querySelector(selector);
@@ -163,7 +225,7 @@ function bindForm(selector, handler) {
 // ---------- Sesión ----------
 function renderNav() {
   const items = currentUser ? [['panel', 'Panel'], ['solicitudes', `Solicitudes <span id="nav-count">${store.requests.length}</span>`], ...(isCommittee() ? [] : [['nueva', 'Nueva solicitud']]), ...(currentUser.role !== 'usuario' ? [['ics', 'Catálogo de ICS'], ['lineas-base', 'Líneas base'], ['reportes', 'Reportes'], ['auditoria', 'Auditoría']] : [])]
-    : [['panel', 'Panel'], ['nueva', 'Nueva solicitud'], ['seguimiento', 'Seguimiento']];
+    : [['login', 'Iniciar sesión'], ['nueva', 'Nueva solicitud'], ['seguimiento', 'Seguimiento']];
   document.querySelector('.app-nav').innerHTML = items.map(([key, label]) => `<a data-nav="${key}" href="#${key}">${label}</a>`).join('') + '<span id="breadcrumb" class="visually-hidden">Panel</span>';
 }
 function renderSession() {
@@ -171,7 +233,7 @@ function renderSession() {
   renderNav();
   if (!currentUser) return;
   document.querySelector('#refresh-data').onclick = async () => { try { await loadStore(); route(); toast('Datos actualizados. Los campos sin guardar se descartaron.'); } catch (e) { toast(e.message, true); } };
-  document.querySelector('#logout').onclick = async () => { try { await api('/auth/logout', { method: 'POST', body: {} }); currentUser = null; csrfToken = ''; store = { requests: [] }; renderSession(); location.hash = 'nueva'; route(); } catch (e) { toast(e.message, true); } };
+  document.querySelector('#logout').onclick = async () => { try { await api('/auth/logout', { method: 'POST', body: {} }); currentUser = null; csrfToken = ''; store = { requests: [] }; renderSession(); location.hash = 'login'; route(); } catch (e) { toast(e.message, true); } };
 }
 function loginScreen(message = '') {
   main.innerHTML = `<div class="login-layout"><aside class="login-story"><a class="login-wordmark" href="#login"><span class="login-mark" aria-hidden="true">${icon('arrow')}</span><span>Trans<strong>viajes</strong></span></a><p class="login-kicker">SISTEMA DE CONTROL DE CAMBIOS</p><h1>Un mejor sistema.<br>Un cambio a la vez.</h1><p class="login-description">Solicitud, análisis, autorización, implementación, pruebas, revisión y cierre de los cambios de BusesUTA.</p><div class="login-features">${[['layers', 'Configuración identificada', 'Catálogo de ICS y líneas base.'], ['check', 'Trazabilidad', 'Cada decisión queda auditada.'], ['user', 'Trabajo en equipo', 'Usuarios, desarrolladores y CCC.']].map(([i, t, d]) => `<div><span>${icon(i)}</span><p><strong>${t}</strong><small>${d}</small></p></div>`).join('')}</div><small class="login-story-footer">Transviajes · Control de Cambios</small></aside><section class="login-access"><form id="login-form" class="login-form" novalidate><p class="login-eyebrow">BIENVENIDO A TRANSVIAJES</p><h2>Iniciar sesión</h2><p class="login-subtitle">Accede al sistema de control de cambios.</p><label for="login-email">Correo electrónico</label><div class="login-input"><span aria-hidden="true">${icon('user')}</span><input id="login-email" name="email" type="email" autocomplete="username" placeholder="Ingresa tu correo electrónico" required maxlength="200"></div><label for="login-password">Contraseña</label><div class="login-input"><span aria-hidden="true">${icon('lock')}</span><input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Ingresa tu contraseña" required maxlength="512"><button id="toggle-password" type="button" aria-label="Mostrar contraseña" aria-pressed="false">${icon('eye')}</button></div><p class="error" id="login-error" role="alert">${esc(message)}</p><button class="btn primary login-submit" type="submit">Iniciar sesión ${icon('arrow')}</button><div class="login-divider"><span>o</span></div><div class="login-guest"><span class="login-guest-icon" aria-hidden="true">${icon('book')}</span><div><h3>¿No tienes una cuenta?</h3><p>Como usuario final puedes presentar una solicitud y consultar su estado con tu clave de seguimiento.</p></div><a class="btn login-guest-link" href="#nueva">Registrar solicitud sin cuenta ${icon('arrow')}</a><a class="btn login-guest-link" href="#seguimiento">Consultar una solicitud ${icon('search')}</a></div><p class="login-note">El acceso del equipo técnico y del CCC requiere una cuenta autorizada.</p></form></section></div>`;
@@ -262,16 +324,6 @@ async function dashboard() {
     card('Solicitudes recientes', requestRows([...store.requests].reverse().slice(0, 6)), { actions: `<a class="text-link" href="#solicitudes">Ver todas ${icon('arrow')}</a>` }) +
     `<div class="bottom-grid"><section class="card"><div class="card-head"><div><h2>Flujo de control de cambios</h2><p>Envío → planificación → aprobación → implementación → revisión → cierre.</p></div></div><div class="info-body steps">${[['01', 'Solicitud', 'CRF de usuario final o técnico, con código y fecha del servidor.'], ['02', 'Ficha del CCC', 'Clasificación ITIL, ICS, impacto, riesgos, rollout, backout y pruebas.'], ['03', 'Ejecución', 'Asignación, implementación, pruebas, revisión y cierre trazables.']].map(s => `<div class="step"><span class="step-num">${s[0]}</span><h3>${s[1]}</h3><p>${s[2]}</p></div>`).join('')}</div></section><section class="card notice"><h2>${icon('info')} Simulación académica</h2><p>Basada en buenas prácticas de ACS e ITIL. Las referencias de GitHub se registran manualmente; el sistema no verifica ni fusiona pull requests.</p></section></div>`;
 }
-async function publicDashboard() {
-  const seq = viewSeq;
-  main.innerHTML = heading('Control de cambios de BusesUTA', 'Cargando resumen…');
-  let counts = null;
-  try { counts = (await api('/public/dashboard')).counts; } catch { /* se muestra sin totales */ }
-  if (currentUser || stale(seq)) return;
-  main.innerHTML = heading('Control de cambios de BusesUTA', 'Presenta una solicitud o consulta su estado sin crear una cuenta.') +
-    (counts ? statTiles([['Solicitudes registradas', counts.total, 'Totales agregados', 'book'], ['En evaluación', counts.review, 'Recepción, análisis y aprobación', 'search'], ['En ejecución', counts.progress, 'Implementación, pruebas y revisión', 'git'], ['Cerradas', counts.closed, `${counts.rejected} rechazadas pendientes de cierre`, 'check']]) : '') +
-    `<section class="card info-body"><h2>¿Qué deseas hacer?</h2><div class="actions"><a class="btn primary" href="#nueva">${icon('plus')} Presentar solicitud</a><a class="btn" href="#seguimiento">${icon('search')} Consultar mi solicitud</a><a class="btn" href="#login">Acceso del equipo técnico y CCC</a></div><p class="hint">Los expedientes y los datos de los solicitantes son de acceso reservado.</p></section>`;
-}
 
 // ---------- Listado ----------
 function listing() {
@@ -299,29 +351,33 @@ const GUIDES = {
   experto: ['Guía técnica', [['cube', 'ICS potencialmente afectados', 'Selecciónalos del catálogo. Si falta uno, sugiérelo: no se crea como aprobado.'], ['layers', 'Versiones', 'Indica la versión conocida o «No determinada». No se asume una versión 1.0.'], ['check', 'Criterios de aceptación', 'Uno por línea, verificables. Se reutilizan en las pruebas y la revisión.'], ['shield', 'Proponer no es aprobar', 'El CCC conserva tu propuesta original y registra sus conclusiones por separado.']]]
 };
 function requestForm(request, kind) {
-  if (currentUser && isCommittee()) { main.innerHTML = heading('Nueva solicitud', 'El CCC recibe y evalúa las solicitudes; no puede presentarlas porque nadie más podría evaluarlas de forma independiente.') + '<a class="btn" href="#solicitudes">Ver solicitudes</a>'; return; }
+  if (!request && currentUser && isCommittee()) { main.innerHTML = heading('Nueva solicitud', 'El CCC recibe y evalúa las solicitudes; no puede presentarlas porque nadie más podría evaluarlas de forma independiente.') + '<a class="btn" href="#solicitudes">Ver solicitudes</a>'; return; }
   kind = request ? request.requesterType : (currentUser?.role || 'usuario');
   const expert = kind === 'experto', editing = !!request;
   const r = request || { name: currentUser?.name || '', email: currentUser?.email || '', acceptanceCriteria: [], currentVersion: 'No determinada' };
   const suggested = new Set(request?.ics?.sugerido || []);
-  const icsPick = ICS.items.filter(i => i.status !== 'Retirado').map(i => `<label class="pick"><input type="checkbox" data-group="suggestedIcs" value="${i.id}" ${suggested.has(i.code) ? 'checked' : ''}> <strong>${esc(i.code)}</strong> ${esc(i.name)} <small class="hint">${esc(i.category)} · ${esc(i.status)}</small></label>`).join('') || '<p class="hint">Todavía no hay ICS catalogados; sugiérelo en el campo siguiente.</p>';
+  const icsPick = icsPicker({ group: 'suggestedIcs', id: 'f-suggestedIcs', checked: i => suggested.has(i.code), empty: 'Todavía no hay ICS catalogados; sugiérelo en el campo siguiente.' });
+  const correcting = editing && isCommittee();
+  const auto = `El código CRF, la fecha y el proyecto (${esc(CAT.PROJECT)}) se asignan automáticamente al enviar.`;
+  // Los datos automáticos no se muestran como campos: solo se informa quién registra la solicitud.
+  const identity = currentUser || editing ? `<div class="identity-note full">${icon('user')}<div><strong>${esc(r.name)}</strong><span>${esc(r.email)}${editing ? ` · ${r.requesterType === 'usuario' ? 'Usuario final' : 'Desarrollador'}` : ''}</span><small>${editing ? 'La identidad del solicitante no se modifica.' : `Se registrará con tu cuenta. ${auto}`}</small></div></div>`
+    : fld('name', 'Nombre del solicitante', { value: r.name, required: true }) + fld('email', 'Correo electrónico', { value: r.email, type: 'email', required: true, hint: 'Se usa como medio de contacto; no se verifica su titularidad.' }) + `<p class="hint full">${auto}</p>`;
   const guide = GUIDES[expert ? 'experto' : 'usuario'];
-  main.innerHTML = `<div class="mockup-layout"><article class="form-paper"><header class="form-intro"><span class="intro-icon">${icon('book')}</span><div><h1>${editing ? `Editar ${esc(r.id)}` : `Solicitud de cambio (CRF) · ${expert ? 'Desarrollador' : 'Usuario final'}`}</h1><p>${expert ? 'Solicitud técnica: además de los datos comunes, documenta tu propuesta técnica.' : 'Describe el cambio que necesitas en BusesUTA. No necesitas conocer términos técnicos.'}</p></div></header>
+  main.innerHTML = `<div class="mockup-layout"><article class="form-paper"><header class="form-intro"><span class="intro-icon">${icon('book')}</span><div><h1>${correcting ? `Corregir ${esc(r.id)}` : editing ? `Editar ${esc(r.id)}` : `Solicitud de cambio (CRF) · ${expert ? 'Desarrollador' : 'Usuario final'}`}</h1><p>${expert ? 'Solicitud técnica: además de los datos comunes, documenta tu propuesta técnica.' : 'Describe el cambio que necesitas en BusesUTA. No necesitas conocer términos técnicos.'}</p></div></header>
   <form id="request-form" class="form-layout" novalidate>${formAlert()}<p class="form-note">Los campos con * son obligatorios.</p>
-  ${section('1', 'Identificación', 'El código y la fecha los genera el servidor al guardar.', fld('code', 'Código de solicitud', { value: r.id || 'Se generará al enviar (CRF-000000)', readonly: true }) + fld('created', 'Fecha de creación', { value: r.createdAt ? dateLabel(r.createdAt, true) : 'Automática al enviar', readonly: true }) + fld('name', 'Nombre del solicitante', { value: r.name, required: true, readonly: !!currentUser }) + fld('email', 'Correo electrónico', { value: r.email, type: 'email', required: true, readonly: !!currentUser, hint: currentUser ? 'Tomado de tu cuenta.' : 'Se usa como medio de contacto; no se verifica su titularidad.' }) + fld('project', 'Proyecto', { value: CAT.PROJECT, readonly: true, hint: 'La aplicación gestiona un único proyecto.' }) + fld('module', 'Módulo afectado', { value: r.module, options: CAT.MODULES, required: true }))}
-  ${section('2', 'Cambio solicitado', 'Qué ocurre, qué se desea y por qué.', fld('title', 'Título', { value: r.title, required: true, full: true, maxlength: 120, placeholder: 'Breve y descriptivo' }) + fld('currentBehavior', 'Situación o comportamiento actual', { value: r.currentBehavior, required: true, area: true }) + check('featureMissing', 'La funcionalidad solicitada todavía no existe', r.featureMissing) + fld('description', 'Descripción del cambio', { value: r.description, required: true, area: true, hint: 'Adición, modificación o eliminación que deseas. Mínimo 20 caracteres.' }) + fld('justification', 'Justificación', { value: r.justification, required: true, area: true, hint: 'Por qué se necesita. Mínimo 20 caracteres.' }) + fld('result', 'Resultado esperado', { value: r.result, required: true, area: true }))}
-  ${expert ? section('3', 'Propuesta técnica', 'Información adicional del desarrollador. No sustituye la clasificación ITIL del CCC.', radios('modificationType', 'Tipo de modificación solicitada', CAT.OPERATIONS, r.modificationType, { descriptions: { 'Adición': 'Agrega un componente o funcionalidad.', 'Modificación': 'Cambia algo existente.', 'Eliminación': 'Retira un componente o funcionalidad.' } }) + `<fieldset class="field full"><legend>Componentes potencialmente afectados (ICS) <span class="required">*</span></legend><div class="pick-list">${icsPick}</div><span class="error" id="f-suggestedIcs-error"></span></fieldset>` + fld('suggestedIcsText', 'ICS sugeridos no catalogados', { value: r.suggestedIcsText, area: true, rows: 2, hint: 'Se registran como sugerencia; el CCC decide si se identifican.' }) + fld('environment', 'Entorno afectado', { value: r.environment, options: CAT.ENVIRONMENTS, required: true }) + fld('currentVersion', 'Versión actual', { value: r.currentVersion, required: true, hint: 'MAJOR.MINOR.PATCH o «No determinada».' }) + fld('targetVersion', 'Versión propuesta', { value: r.targetVersion, hint: 'Opcional; el CCC puede revisarla.' }) + fld('proposedPriority', 'Prioridad propuesta', { value: r.proposedPriority || 'Media', options: CAT.LEVELS }) + fld('spec', 'Especificación técnica (Spec)', { value: r.spec, area: true, rows: 2 }) + fld('specUrl', 'Enlace a la especificación', { value: r.specUrl, type: 'url', placeholder: 'https://…' }) + check('businessRulesAffected', 'Hay reglas de negocio afectadas', r.businessRulesAffected) + fld('businessRules', 'Reglas de negocio afectadas', { value: r.businessRules === 'No aplica' ? '' : r.businessRules, area: true, rows: 2, hint: 'Obligatorio si marcaste la casilla anterior; si no, se registra «No aplica».' }) + fld('acceptanceCriteria', 'Criterios de aceptación', { value: r.acceptanceCriteria, area: true, required: true, hint: 'Uno por línea, claros y verificables.' })) : ''}
-  ${section(expert ? '4' : '3', 'Información complementaria', 'Opcional.', fld('desiredDate', 'Fecha deseada', { value: r.desiredDate, type: 'date', min: today(), hint: 'Preferencia del solicitante; no es una fecha autorizada.' }) + fld('observations', 'Observaciones', { value: r.observations, area: true, rows: 2 }) + (editing ? '<p class="hint full">Para agregar archivos usa la sección de evidencias del expediente.</p>' : fileField('files', 'Archivos adjuntos')))}
-  <div class="form-actions">${editing ? `<a class="btn" href="#detalle/${esc(r.id)}">Cancelar</a>` : ''}<button class="btn primary" type="submit">${icon('send')} ${editing ? 'Guardar cambios' : 'Enviar solicitud'}</button></div></form></article>
+  ${correcting ? section('!', 'Corrección del CCC', 'Los datos originales del solicitante se conservan y cada campo corregido queda en la auditoría.', fld('correctionReason', 'Motivo de la corrección', { area: true, required: true, rows: 2, attrs: 'minlength="10"' })) : ''}
+  ${section('1', editing ? 'Solicitante' : 'Identificación', editing ? 'Datos registrados al crear la solicitud.' : '¿Quién solicita y qué parte del sistema se ve afectada?', identity + fld('module', 'Módulo afectado', { value: r.module, options: CAT.MODULES, required: true }))}
+  ${section('2', 'Cambio solicitado', 'Qué ocurre, qué se desea y por qué.', fld('title', 'Título', { value: r.title, required: true, full: true, maxlength: 120, placeholder: 'Breve y descriptivo' }) + fld('currentBehavior', 'Situación o comportamiento actual', { value: r.currentBehavior, required: true, area: true }) + check('featureMissing', 'La funcionalidad solicitada todavía no existe', r.featureMissing, { hint: 'Márcalo si pides algo nuevo y no la corrección de algo que ya funciona. Así el CCC lo distingue de un error y no espera un comportamiento actual que reproducir; en «Situación actual» cuenta cómo resuelves hoy esa necesidad.' }) + fld('description', 'Descripción del cambio', { value: r.description, required: true, area: true, hint: 'Adición, modificación o eliminación que deseas. Mínimo 20 caracteres.', attrs: 'minlength="20"' }) + fld('justification', 'Justificación', { value: r.justification, required: true, area: true, hint: 'Por qué se necesita. Mínimo 20 caracteres.', attrs: 'minlength="20"' }) + fld('result', 'Resultado esperado', { value: r.result, required: true, area: true }))}
+  ${expert ? section('3', 'Propuesta técnica', 'Información adicional del desarrollador. No sustituye la clasificación ITIL del CCC.', radios('modificationType', 'Tipo de modificación solicitada', CAT.OPERATIONS, r.modificationType, { descriptions: { 'Adición': 'Agrega un componente o funcionalidad.', 'Modificación': 'Cambia algo existente.', 'Eliminación': 'Retira un componente o funcionalidad.' } }) + `<div class="field full"><span class="field-label">Componentes potencialmente afectados (ICS) <span class="required">*</span></span><small class="hint">Selecciona uno o varios elementos del catálogo, o sugiere uno nuevo en el campo siguiente.</small>${icsPick}<span class="error" id="f-suggestedIcs-error"></span></div>` + fld('suggestedIcsText', 'ICS sugeridos no catalogados', { value: r.suggestedIcsText, area: true, rows: 2, hint: 'Se registran como sugerencia; el CCC decide si se identifican.' }) + fld('environment', 'Entorno afectado', { value: r.environment, options: CAT.ENVIRONMENTS, required: true }) + fld('currentVersion', 'Versión actual', { value: r.currentVersion, required: true, hint: 'MAJOR.MINOR.PATCH (p. ej. 1.2.0) o «No determinada».', attrs: versionAttr({ allow: ['No determinada'] }) }) + fld('targetVersion', 'Versión propuesta', { value: r.targetVersion, hint: 'Opcional. Debe ser mayor que la versión actual; el CCC puede revisarla.', attrs: versionAttr({ gtFrom: 'currentVersion' }) }) + fld('proposedPriority', 'Prioridad propuesta', { value: r.proposedPriority || 'Media', options: CAT.LEVELS }) + fld('spec', 'Especificación técnica (Spec)', { value: r.spec, area: true, rows: 2 }) + fld('specUrl', 'Enlace a la especificación', { value: r.specUrl, type: 'url', placeholder: 'https://…' }) + check('businessRulesAffected', 'Hay reglas de negocio afectadas', r.businessRulesAffected) + fld('businessRules', 'Reglas de negocio afectadas', { value: r.businessRules === 'No aplica' ? '' : r.businessRules, area: true, rows: 2, hint: 'Obligatorio si marcaste la casilla anterior; si no, se registra «No aplica».' }) + fld('acceptanceCriteria', 'Criterios de aceptación', { value: r.acceptanceCriteria, area: true, required: true, hint: 'Uno por línea, claros y verificables.' })) : ''}
+  ${section(expert ? '4' : '3', 'Información complementaria', 'Opcional.', fld('desiredDate', 'Fecha deseada', { value: r.desiredDate, type: 'date', min: correcting ? r.date : today(), hint: 'Preferencia del solicitante; no es una fecha autorizada.' }) + fld('observations', 'Observaciones', { value: r.observations, area: true, rows: 2 }) + (editing ? '<p class="hint full">Para agregar archivos usa la sección de evidencias del expediente.</p>' : fileField('files', 'Archivos adjuntos')))}
+  <div class="form-actions">${editing ? `<a class="btn" href="#detalle/${esc(r.id)}">Cancelar</a>` : ''}<button class="btn primary" type="submit">${icon('send')} ${correcting ? 'Guardar corrección' : editing ? 'Guardar cambios' : 'Enviar solicitud'}</button></div></form></article>
   <aside class="guide-card"><h2>${icon('info')} ${guide[0]}</h2><div class="guide-body">${guide[1].map(([ico, t, p]) => `<div class="guide-item"><span>${icon(ico)}</span><div><h3>${t}</h3><p>${p}</p></div></div>`).join('')}</div></aside></div>`;
   bindForm('#request-form', async form => {
     const data = collect(form), errors = {};
     if (data.description && data.description.length < 20) errors['f-description'] = 'Escribe al menos 20 caracteres.';
     if (data.justification && data.justification.length < 20) errors['f-justification'] = 'Escribe al menos 20 caracteres.';
-    if (data.desiredDate && data.desiredDate < today()) errors['f-desiredDate'] = 'No puede ser anterior a hoy.';
+    if (data.desiredDate && data.desiredDate < (correcting ? r.date : today())) errors['f-desiredDate'] = 'No puede ser anterior a la fecha de la solicitud.';
     if (expert) {
-      if (data.currentVersion && data.currentVersion !== 'No determinada' && !/^\d+\.\d+\.\d+$/.test(data.currentVersion)) errors['f-currentVersion'] = 'Usa MAJOR.MINOR.PATCH o «No determinada».';
-      if (data.targetVersion && !/^\d+\.\d+\.\d+$/.test(data.targetVersion)) errors['f-targetVersion'] = 'Usa MAJOR.MINOR.PATCH.';
       if (!(data.suggestedIcs || []).length && !data.suggestedIcsText) errors['f-suggestedIcs'] = 'Selecciona al menos un ICS o sugiere uno nuevo.';
       if (data.businessRulesAffected && !data.businessRules) errors['f-businessRules'] = 'Describe las reglas de negocio afectadas.';
       data.suggestedIcs = (data.suggestedIcs || []).map(Number);
@@ -335,8 +391,9 @@ function requestForm(request, kind) {
       return;
     }
     const result = await saveAction(editing ? `/requests/${r.id}` : '/requests', { ...data, revision: r.revision }, editing ? 'PATCH' : 'POST', form);
-    if (result) { toast(editing ? 'Solicitud actualizada.' : `Solicitud ${result.request.id} registrada.`); location.hash = `detalle/${result.request.id}`; }
+    if (result) { toast(correcting ? 'Corrección registrada; los datos originales se conservan.' : editing ? 'Solicitud actualizada.' : `Solicitud ${result.request.id} registrada.`); location.hash = `detalle/${result.request.id}`; }
   });
+  bindPickers();
 }
 function receipt(rc) {
   main.innerHTML = heading('Solicitud enviada', 'El Comité de Control de Cambios recibió tu solicitud.') + `<section class="card info-body receipt"><h2>${icon('check')} Solicitud ${esc(rc.id)}</h2><p>Fecha: ${dateLabel(rc.date)} · Estado: ${badge(rc.status)}</p>${callout('warn', `<strong>Guarda tu clave de seguimiento.</strong> Es la única forma de consultar el estado y responder al CCC sin cuenta. No se muestra de nuevo.<br><code class="token">${esc(rc.trackingToken)}</code>`)}<div class="actions"><a class="btn primary" href="#seguimiento">Consultar estado</a><button class="btn" id="another-request" type="button">Presentar otra solicitud</button></div></section>`;
@@ -384,14 +441,30 @@ function renderDetail() {
   const auth = authorization(r), round = r.implementation?.rounds?.at(-1);
   const linkTable = kind => links.filter(l => l.kind === kind && (kind !== 'autorizado' || l.active));
   const actions = [];
+  if (ccc && r.status !== 'Cerrada') actions.push(`<a class="btn" href="#editar/${esc(r.id)}">${icon('edit')} Corregir CRF</a>`);
   if (editable) actions.push(`<a class="btn" href="#editar/${esc(r.id)}">${icon('edit')} Editar</a><button class="btn danger" id="delete-request" type="button">${icon('trash')} Eliminar</button>`);
   if (ccc && ['En análisis', 'En planificación', 'Pendiente de aprobación', 'Aprobada', 'Aprobada con condiciones', 'Asignada'].includes(r.status)) actions.push(`<a class="btn primary" href="#ficha/${esc(r.id)}">${icon('shield')} Ficha del CCC</a>`);
-  const jump = [['sec-solicitud', 'Solicitud'], ['sec-ccc', 'Evaluación'], ['sec-ics', 'ICS'], ['sec-impl', 'Implementación'], ['sec-tests', 'Pruebas'], ['sec-review', 'Revisión y cierre'], ['sec-audit', 'Auditoría'], ['sec-history', 'Historial']];
+  const stageIdx = CAT.STAGES.findIndex(([, states]) => states.includes(r.status));
+  const phase = (from, to) => stageIdx > to ? 'done' : stageIdx >= from ? 'current' : '';
+  const modifiedCount = linkTable('modificado').length, authorizedCount = linkTable('autorizado').length, lastReview = r.reviews?.at(-1);
+  const actionsHtml = stageActions(r, { ccc, iAmAssignee, owner });
+  const jump = [
+    actionsHtml && ['sec-actions', 'Acciones', 'flag', 'Tareas de tu rol', 'current'],
+    ['sec-solicitud', 'Solicitud', 'book', r.corrections?.length ? 'Corregida por el CCC' : r.requesterType === 'usuario' ? 'Usuario final' : 'Desarrollador', phase(0, 0)],
+    ['sec-ccc', 'Evaluación', 'shield', auth ? auth.decision : r.evaluation?.planningCompletedAt ? 'Planificada' : r.evaluation ? 'En curso' : 'Pendiente', phase(1, 3)],
+    ['sec-ics', 'ICS', 'cube', authorizedCount ? `${modifiedCount} de ${authorizedCount} modificados` : `${linkTable('potencial').length || linkTable('sugerido').length} relacionados`, ''],
+    ['sec-impl', 'Implementación', 'git', round ? `Ronda ${round.n}` : 'Sin iniciar', phase(4, 4)],
+    ['sec-tests', 'Pruebas', 'list', r.tests?.length ? `${r.tests.length} ejecuciones` : 'Sin pruebas', phase(5, 5)],
+    ['sec-review', 'Revisión y cierre', 'flag', r.closure ? (r.closure.result || r.closure.administrative) : lastReview ? lastReview.decision : 'Pendiente', phase(6, 7)],
+    ['sec-audit', 'Auditoría', 'search', current.configAudit.findings.length ? `${current.configAudit.findings.length} observaciones` : 'Sin desviaciones', ''],
+    ['sec-history', 'Historial', 'clock', `${r.history.length} eventos`, '']
+  ].filter(Boolean);
   main.innerHTML = heading(`${esc(r.id)} · ${esc(r.title)}`, `${r.requesterType === 'usuario' ? 'CRF de usuario final' : 'CRF técnico'} · ${esc(r.name)} · ${dateLabel(r.createdAt, true)}${r.legacyCode ? ` · código anterior ${esc(r.legacyCode)}` : ''}`, `<div class="actions" style="margin:0"><a class="btn" href="#solicitudes">${icon('back')} Volver</a>${actions.join('')}</div>`) +
-    progress(r) + `<nav class="jump-nav" aria-label="Secciones del expediente">${jump.map(([sid, label]) => `<button type="button" class="chip" data-jump="${sid}">${label}</button>`).join('')}</nav>` +
+    progress(r) +
     (r.flags?.length ? callout('warn', `<strong>Información heredada marcada para revisión:</strong>${listHtml(r.flags)}`) : '') +
-    `<div class="detail-stack">${stageActions(r, { ccc, iAmAssignee, owner })}
+    `<div class="case-layout"><aside class="case-nav"><nav aria-label="Fases del expediente"><p class="case-nav-title">Fases del expediente</p><ul>${jump.map(([sid, label, ico, meta, cls]) => `<li><button type="button" class="case-nav-item ${cls}" data-jump="${sid}">${icon(ico)}<span><strong>${label}</strong><small>${esc(meta)}</small></span></button></li>`).join('')}</ul></nav></aside><div class="detail-stack">${actionsHtml}
     ${card('Solicitud original', dl([['Estado', badge(r.status)], ['Prioridad oficial', priority(r.priority)], ['Solicitante', `${esc(r.name)} · ${esc(r.email)}${r.submittedWithoutAccount ? ' <small class="hint">(sin cuenta, contacto no verificado)</small>' : ''}`], ['Proyecto', esc(r.project)], ['Módulo', esc(r.module)], ['Fecha deseada', r.desiredDate ? `${dateLabel(r.desiredDate)} <small class="hint">(preferencia, no autorizada)</small>` : text('')], ['Situación actual', `${text(r.currentBehavior)}${r.featureMissing ? '<br><small class="hint">La funcionalidad todavía no existe.</small>' : ''}`, true], ['Descripción del cambio', text(r.description), true], ['Justificación', text(r.justification), true], ['Resultado esperado', text(r.result), true], ['Observaciones', text(r.observations), true]]) +
+      (r.corrections?.length ? callout('info', `<strong>Corregida por el CCC:</strong><ul class="plain-list">${r.corrections.map(c => `<li>${esc(c.by)} · ${dateLabel(c.at, true)} · ${esc(c.fields.join(', '))}: ${esc(c.reason)}</li>`).join('')}</ul>`) + (r.original ? `<details class="original-data"><summary>Ver los datos originales del solicitante</summary>${dl(Object.entries(r.original).filter(([k]) => k !== 'savedAt').map(([k, v]) => [k, Array.isArray(v) ? listHtml(v) : text(typeof v === 'boolean' ? (v ? 'Sí' : 'No') : v), true]))}</details>` : '') : '') +
       (r.requesterType === 'experto' ? `<h3>Propuesta técnica del desarrollador</h3>${dl([['Tipo de modificación', text(r.modificationType)], ['Entorno', text(r.environment)], ['Versión actual', text(r.currentVersion)], ['Versión propuesta', text(r.targetVersion)], ['Prioridad propuesta', priority(r.proposedPriority)], ['Spec', `${text(r.spec)}${r.specUrl ? `<br><a class="text-link" href="${esc(r.specUrl)}" target="_blank" rel="noopener noreferrer">${esc(r.specUrl)}</a>` : ''}`, true], ['Reglas de negocio afectadas', text(r.businessRules), true], ['Criterios de aceptación', listHtml(r.acceptanceCriteria), true], ['ICS sugeridos', esc(r.ics?.sugerido?.join(', ') || '—')], ['ICS sugeridos no catalogados', text(r.suggestedIcsText)]])}` : '') +
       `<h3>Adjuntos y evidencias</h3>${attachments.length ? table(['Archivo', 'Contexto', 'Tamaño', 'Registrado por', 'Fecha'], attachments.map(a => [`<a class="text-link" href="/api/attachments/${esc(a.id)}">${icon('attach')} ${esc(a.filename)}</a><small class="hint">sha256 ${esc(a.sha256.slice(0, 12))}…</small>`, esc(a.context), `${Math.ceil(a.size / 1024)} KB`, esc(a.uploader_name), dateLabel(a.created_at, true)])) : '<p class="hint">Sin archivos adjuntos.</p>'}${r.legacy?.attachmentNames?.length ? `<p class="hint">Nombres registrados en la versión anterior (sin archivo real): ${r.legacy.attachmentNames.map(n => `<span class="file-chip">${esc(n)}</span>`).join(' ')}</p>` : ''}
       ${r.status !== 'Cerrada' ? `<form id="upload-form" class="inline-form" novalidate>${formAlert()}${fileField('files', 'Agregar archivos', 'up')}<div class="form-actions full"><button class="btn" type="submit">${icon('attach')} Subir archivos</button></div></form>` : ''}` +
@@ -402,8 +475,16 @@ function renderDetail() {
     ${card('Pruebas', testsSection(r), { id: 'sec-tests' })}
     ${card('Revisión postimplementación, backout y cierre', reviewSection(r), { id: 'sec-review' })}
     ${card('Auditoría de configuración', configAuditSection(current.configAudit), { id: 'sec-audit', subtitle: current.configAudit.note })}
-    ${card('Historial y eventos de auditoría', `<ol class="history">${[...r.history].reverse().map(h => `<li><strong>${esc(h.action || h.status)} · ${esc(h.responsible)}</strong><small>${dateLabel(h.date, true)}${h.from && h.from !== h.status ? ` · ${esc(h.from)} → ${esc(h.status)}` : ` · ${esc(h.status)}`}</small><p>${esc(h.note)}</p></li>`).join('')}</ol><details><summary>Eventos detallados (${current.audit.length})</summary>${auditTable(current.audit)}</details>`, { id: 'sec-history', subtitle: 'El historial no se modifica: cada corrección genera un evento nuevo.' })}</div>`;
-  document.querySelectorAll('[data-jump]').forEach(b => b.onclick = () => document.getElementById(b.dataset.jump)?.scrollIntoView({ behavior: 'smooth' }));
+    ${card('Historial y eventos de auditoría', `<ol class="history">${[...r.history].reverse().map(h => `<li><strong>${esc(h.action || h.status)} · ${esc(h.responsible)}</strong><small>${dateLabel(h.date, true)}${h.from && h.from !== h.status ? ` · ${esc(h.from)} → ${esc(h.status)}` : ` · ${esc(h.status)}`}</small><p>${esc(h.note)}</p></li>`).join('')}</ol><details><summary>Eventos detallados (${current.audit.length})</summary>${auditTable(current.audit)}</details>`, { id: 'sec-history', subtitle: 'El historial no se modifica: cada corrección genera un evento nuevo.' })}</div></div>`;
+  const navItems = [...document.querySelectorAll('[data-jump]')];
+  const activate = sid => navItems.forEach(b => b.classList.toggle('active', b.dataset.jump === sid));
+  navItems.forEach(b => b.onclick = () => { activate(b.dataset.jump); document.getElementById(b.dataset.jump)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  // Resalta la fase visible mientras se desplaza el expediente.
+  if (typeof IntersectionObserver === 'function') {
+    const observer = new IntersectionObserver(entries => { const visible = entries.filter(e => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0]; if (visible) activate(visible.target.id); }, { rootMargin: '-15% 0px -70% 0px' });
+    navItems.forEach(b => { const target = document.getElementById(b.dataset.jump); if (target) observer.observe(target); });
+  }
+  if (navItems[0]) activate(navItems[0].dataset.jump);
   bindDetail(r);
 }
 function evaluationSummary(r, links) {
@@ -483,8 +564,8 @@ function stageActions(r, { ccc, iAmAssignee, owner }) {
     const criteria = current.reviewCriteria;
     forms.push(box('Revisión postimplementación', 'act-review', (assignee?.developerId === currentUser.id ? callout('info', 'Eres el implementador: se recomienda que otro desarrollador realice la revisión.') : '') + fld('summary', 'Resumen de implementación', { area: true, required: true, rows: 2, prefix: 'rv' }) + `<fieldset class="field full"><legend>Cumplimiento de criterios de aceptación</legend>${criteria.map((c, i) => `<label class="check"><input type="checkbox" data-group="criteria" value="${i}"> ${esc(c)}</label>`).join('') || '<p class="hint">Sin criterios.</p>'}</fieldset>` + (auth?.conditions?.length ? `<fieldset class="field full"><legend>Condiciones del CCC</legend>${auth.conditions.map(c => `<label class="check"><input type="checkbox" data-group="conditionsMet" value="${esc(c.id)}"> ${esc(c.text)} <small class="hint">${esc(c.verification)}</small></label><input name="cond-evidence-${esc(c.id)}" aria-label="Evidencia de ${esc(c.id)}" placeholder="Evidencia de ${esc(c.id)}" maxlength="1000">`).join('')}</fieldset>` : '') + fld('rolloutCompliance', 'Cumplimiento del plan de rollout', { options: CAT.ROLLOUT_COMPLIANCE, required: true, prefix: 'rv' }) + fld('deviationsFound', 'Desviaciones encontradas', { area: true, rows: 2, prefix: 'rv' }) + fld('pendingIssues', 'Incidencias pendientes', { area: true, rows: 2, prefix: 'rv' }) + fld('recommendation', 'Recomendación final', { area: true, rows: 2, required: true, prefix: 'rv' }) + fld('evidence', 'Evidencias', { prefix: 'rv' }) + radios('decision', 'Decisión de la revisión', CAT.REVIEW_DECISIONS, '', { prefix: 'rv' }), 'Registrar revisión', 'Evalúa si la ejecución, el alcance, las condiciones y los resultados son conformes con lo autorizado.'));
   }
-  if (iAmAssignee && r.status === 'En revisión' && r.reviews?.at(-1)?.round === r.implementation.rounds.length) forms.push(box('Cierre de la solicitud', 'act-close', radios('result', 'Resultado final', CAT.CLOSURE_RESULTS, r.reviews.at(-1).decision === 'Conforme' ? 'Exitoso' : '', { prefix: 'cz', descriptions: { 'Exitoso': 'Requiere revisión conforme.', 'Fallido': 'Exige justificación.', 'Incompleto': 'Exige justificación.' } }) + fld('summary', 'Resumen del trabajo', { area: true, required: true, rows: 2, prefix: 'cz' }) + fld('resultingVersion', 'Versión resultante', { prefix: 'cz', placeholder: 'MAJOR.MINOR.PATCH' }) + fld('justification', 'Justificación del cierre', { area: true, rows: 2, prefix: 'cz' }) + fld('evidence', 'Evidencias', { prefix: 'cz' }), `${icon('flag')} Cerrar solicitud`, `Última revisión: ${esc(r.reviews.at(-1).decision)}. El resultado de autorización, el de implementación y el administrativo se guardan por separado.`));
-  return forms.length ? card('Acciones disponibles', `<div class="action-grid">${forms.join('')}</div>`, { subtitle: `Tu rol: ${esc(ROLE[currentUser.role])}. El servidor valida cada transición.` }) : '';
+  if (iAmAssignee && r.status === 'En revisión' && r.reviews?.at(-1)?.round === r.implementation.rounds.length) forms.push(box('Cierre de la solicitud', 'act-close', radios('result', 'Resultado final', CAT.CLOSURE_RESULTS, r.reviews.at(-1).decision === 'Conforme' ? 'Exitoso' : '', { prefix: 'cz', descriptions: { 'Exitoso': 'Requiere revisión conforme.', 'Fallido': 'Exige justificación.', 'Incompleto': 'Exige justificación.' } }) + fld('summary', 'Resumen del trabajo', { area: true, required: true, rows: 2, prefix: 'cz' }) + fld('resultingVersion', 'Versión resultante', { prefix: 'cz', placeholder: 'MAJOR.MINOR.PATCH', hint: r.currentVersion && r.currentVersion !== 'No determinada' ? `Debe ser mayor que ${esc(r.currentVersion)}.` : '', attrs: versionAttr({ gt: r.currentVersion }) }) + fld('justification', 'Justificación del cierre', { area: true, rows: 2, prefix: 'cz' }) + fld('evidence', 'Evidencias', { prefix: 'cz' }), `${icon('flag')} Cerrar solicitud`, `Última revisión: ${esc(r.reviews.at(-1).decision)}. El resultado de autorización, el de implementación y el administrativo se guardan por separado.`));
+  return forms.length ? card('Acciones disponibles', `<div class="action-grid">${forms.join('')}</div>`, { id: 'sec-actions', subtitle: `Tu rol: ${esc(ROLE[currentUser.role])}. El servidor valida cada transición.` }) : '';
 }
 function bindDetail(r) {
   const post = async (form, action, body, { confirm: confirmText, success } = {}) => {
@@ -540,19 +621,19 @@ async function ficha(id) {
   const editable = ['En análisis', 'En planificación', 'Pendiente de aprobación'].includes(r.status);
   const potential = new Map(links.filter(l => l.kind === 'potencial').map(l => [l.icsId, l.operation])), suggested = new Set(links.filter(l => l.kind === 'sugerido').map(l => l.icsId));
   const p = 'ev';
-  const icsRows = ICS.items.filter(i => i.status !== 'Retirado').map(i => `<div class="pick"><label><input type="checkbox" data-group="potentialIds" value="${i.id}" ${potential.has(i.id) ? 'checked' : ''}> <strong>${esc(i.code)}</strong> ${esc(i.name)} <small class="hint">${esc(i.category)} · ${esc(i.status)}${suggested.has(i.id) ? ' · sugerido por el iniciador' : ''}</small></label><select name="op-${i.id}" aria-label="Operación prevista para ${esc(i.code)}">${options(CAT.OPERATIONS, potential.get(i.id) || 'Modificación')}</select></div>`).join('') || '<p class="hint">No hay ICS en el catálogo. Regístralos en «Catálogo de ICS» o justifica su ausencia.</p>';
+  const icsRows = icsPicker({ group: 'potentialIds', checked: i => potential.has(i.id), operation: i => potential.get(i.id), note: i => suggested.has(i.id) ? 'Sugerido por el iniciador' : '', empty: 'No hay ICS en el catálogo. Regístralos en «Catálogo de ICS» o justifica su ausencia.' });
   const auth = authorization(r);
   main.innerHTML = heading(`Ficha del CCC · ${esc(r.id)}`, `${esc(r.title)} · ${badge(r.status)}`, `<a class="btn" href="#detalle/${esc(r.id)}">${icon('back')} Expediente</a>`) + progress(r) +
     `<section class="card request-summary"><h2>${icon('book')} Solicitud original (solo lectura)</h2>${dl([['Solicitante', `${esc(r.name)} · ${r.requesterType === 'usuario' ? 'Usuario final' : 'Desarrollador'}`], ['Módulo', esc(r.module)], ['Descripción', text(r.description), true], ['Justificación', text(r.justification), true], r.requesterType === 'experto' && ['Propuesta técnica', `${esc(r.modificationType)} · ${esc(r.environment)} · versión ${esc(r.currentVersion)} → ${esc(r.targetVersion || '—')} · prioridad propuesta ${esc(r.proposedPriority)}`, true], r.acceptanceCriteria?.length && ['Criterios de aceptación', listHtml(r.acceptanceCriteria), true]])}</section>` +
     `<form id="eval-form" class="form-layout" novalidate>${formAlert()}<fieldset ${editable ? '' : 'disabled'} class="plain-fieldset">
-    ${section('A', 'Identificación y clasificación', `Miembro del CCC: ${esc(e.member || currentUser.name)} · inicio del análisis ${dateLabel(e.startedAt, true)}`, radios('itilType', 'Tipo de cambio ITIL', Object.keys(CAT.ITIL), e.itilType, { prefix: p, descriptions: CAT.ITIL }) + fld('classificationJustification', 'Justificación de la clasificación', { value: e.classificationJustification, area: true, required: true, prefix: p, hint: 'En emergencia explica la situación (mín. 30 caracteres). En estándar identifica el procedimiento autorizado.' }) + `<div id="standard-box" class="full fields">${fld('standardReference', 'Procedimiento estándar de referencia (CRF)', { value: e.standardReference, prefix: p, placeholder: 'CRF-000001', hint: 'Opcional: un cambio estándar cerrado con éxito cuya autorización se reutiliza.' })}${check('standardSameConditions', 'Corresponde exactamente al procedimiento aprobado y sus condiciones no cambiaron', e.standardSameConditions, { prefix: p })}<div class="field"><button class="btn" type="button" id="copy-standard">Copiar planes del procedimiento</button></div></div>` + `<fieldset class="field full"><legend>ICS potencialmente afectados</legend><div class="pick-list">${icsRows}</div></fieldset>` + fld('icsNote', 'Situación de los ICS aún no identificados', { value: e.icsNote, area: true, rows: 2, prefix: p, hint: 'Obligatorio si no seleccionas ningún ICS.' }) + fld('plannedChanges', 'Conjunto de modificaciones previstas', { value: e.plannedChanges, area: true, required: true, prefix: p, hint: 'Qué se agregará, modificará o eliminará. Se distingue de lo que realmente se implemente.' }))}
-    ${section('B', 'Análisis de impacto y viabilidad', 'Obligatorio antes de una autorización normal. Viabilidad no equivale a aprobación.', radios('impact', 'Impacto estimado', CAT.IMPACT, e.impact, { prefix: p }) + radios('urgency', 'Urgencia', CAT.LEVELS, e.urgency, { prefix: p }) + `<div class="field full">${radios('priority', 'Prioridad', CAT.LEVELS, e.priority, { prefix: p })}<small class="hint" id="priority-suggestion"></small></div>` + fld('technicalImpact', 'Impacto técnico previsto', { value: e.technicalImpact, area: true, required: true, prefix: p, hint: 'Componentes, dependencias, compatibilidad y efectos secundarios.' }) + fld('functionalImpact', 'Impacto funcional u operativo', { value: e.functionalImpact, area: true, required: true, prefix: p, hint: 'Venta de boletos, asientos, procesos de las cooperativas…' }) + fld('risks', 'Riesgos identificados', { value: e.risks, area: true, required: true, prefix: p, hint: 'Uno por línea.' }) + radios('feasibility', 'Viabilidad técnica', CAT.FEASIBILITY, e.feasibility, { prefix: p }) + fld('feasibilityJustification', 'Justificación de viabilidad', { value: e.feasibilityJustification, area: true, required: true, prefix: p }) + fld('effortHours', 'Esfuerzo estimado (horas-persona)', { value: e.effortHours, type: 'number', min: 0, step: '0.5', required: true, prefix: p }) + fld('durationDays', 'Duración estimada (días calendario)', { value: e.durationDays, type: 'number', min: 0, step: '0.5', required: true, prefix: p }) + fld('resources', 'Recursos necesarios', { value: e.resources, area: true, rows: 2, required: true, prefix: p, hint: 'O «No se requieren recursos adicionales».' }) + fld('considerations', 'Consideraciones adicionales', { value: e.considerations, area: true, rows: 2, prefix: p }))}
+    ${section('A', 'Identificación y clasificación', `Miembro del CCC: ${esc(e.member || currentUser.name)} · inicio del análisis ${dateLabel(e.startedAt, true)}`, radios('itilType', 'Tipo de cambio ITIL', Object.keys(CAT.ITIL), e.itilType, { prefix: p, descriptions: CAT.ITIL }) + fld('classificationJustification', 'Justificación de la clasificación', { value: e.classificationJustification, area: true, required: true, prefix: p, hint: 'En emergencia explica la situación (mín. 30 caracteres). En estándar identifica el procedimiento autorizado.' }) + `<div id="standard-box" class="full fields">${fld('standardReference', 'Procedimiento estándar de referencia (CRF)', { value: e.standardReference, prefix: p, placeholder: 'CRF-000001', hint: 'Opcional: un cambio estándar cerrado con éxito cuya autorización se reutiliza.' })}${check('standardSameConditions', 'Corresponde exactamente al procedimiento aprobado y sus condiciones no cambiaron', e.standardSameConditions, { prefix: p })}<div class="field"><button class="btn" type="button" id="copy-standard">Copiar planes del procedimiento</button></div></div>` + `<div class="field full"><span class="field-label">ICS potencialmente afectados</span><small class="hint">Revisa los sugeridos por el iniciador e indica la operación prevista en cada uno.</small>${icsRows}</div>` + fld('icsNote', 'Situación de los ICS aún no identificados', { value: e.icsNote, area: true, rows: 2, prefix: p, hint: 'Obligatorio si no seleccionas ningún ICS.' }) + fld('plannedChanges', 'Conjunto de modificaciones previstas', { value: e.plannedChanges, area: true, required: true, prefix: p, hint: 'Qué se agregará, modificará o eliminará. Se distingue de lo que realmente se implemente.' }))}
+    ${section('B', 'Análisis de impacto y viabilidad', 'Obligatorio antes de una autorización normal. Viabilidad no equivale a aprobación.', radios('impact', 'Impacto estimado', CAT.IMPACT, e.impact, { prefix: p }) + radios('urgency', 'Urgencia', CAT.LEVELS, e.urgency, { prefix: p }) + `<div class="field full">${radios('priority', 'Prioridad', CAT.LEVELS, e.priority, { prefix: p })}<small class="hint" id="priority-suggestion"></small></div>` + fld('technicalImpact', 'Impacto técnico previsto', { value: e.technicalImpact, area: true, required: true, prefix: p, hint: 'Componentes, dependencias, compatibilidad y efectos secundarios.' }) + fld('functionalImpact', 'Impacto funcional u operativo', { value: e.functionalImpact, area: true, required: true, prefix: p, hint: 'Venta de boletos, asientos, procesos de las cooperativas…' }) + fld('risks', 'Riesgos identificados', { value: e.risks, area: true, required: true, prefix: p, hint: 'Uno por línea.' }) + radios('feasibility', 'Viabilidad técnica', CAT.FEASIBILITY, e.feasibility, { prefix: p }) + `<div id="feas-warning" class="full" hidden>${callout('danger', 'Un cambio <strong>no viable</strong> no puede aprobarse: solo puede rechazarse o reevaluarse corrigiendo el análisis.')}</div>` + fld('feasibilityJustification', 'Justificación de viabilidad', { value: e.feasibilityJustification, area: true, required: true, prefix: p }) + fld('effortHours', 'Esfuerzo estimado (horas-persona)', { value: e.effortHours, type: 'number', min: 0, step: '0.5', required: true, prefix: p }) + fld('durationDays', 'Duración estimada (días calendario)', { value: e.durationDays, type: 'number', min: 0, step: '0.5', required: true, prefix: p }) + fld('resources', 'Recursos necesarios', { value: e.resources, area: true, rows: 2, required: true, prefix: p, hint: 'O «No se requieren recursos adicionales».' }) + fld('considerations', 'Consideraciones adicionales', { value: e.considerations, area: true, rows: 2, prefix: p }))}
     ${section('C', 'Planificación del cambio', 'Rollout, backout y pruebas. No es obligatoria para rechazar; sí para aprobar. En emergencia se admite una versión resumida.', `<h3 class="full">Plan de rollout</h3>` + fld('rolloutObjective', 'Objetivo de la implementación', { value: e.rolloutObjective, area: true, rows: 2, prefix: p }) + fld('rolloutSteps', 'Actividades en orden de ejecución', { value: e.rolloutSteps, area: true, rows: 4, prefix: p, hint: 'Una actividad por línea, en orden.' }) + fld('rolloutDependencies', 'Dependencias', { value: e.rolloutDependencies, area: true, rows: 2, prefix: p }) + fld('rolloutResponsibles', 'Responsables previstos', { value: e.rolloutResponsibles, prefix: p }) + fld('rolloutChecks', 'Verificaciones iniciales', { value: e.rolloutChecks, area: true, rows: 2, prefix: p }) + fld('rolloutCompletion', 'Condiciones de implementación completada', { value: e.rolloutCompletion, area: true, rows: 2, prefix: p }) +
       `<h3 class="full">Plan de backout</h3>` + fld('backoutTriggers', 'Condiciones que activan la reversión', { value: e.backoutTriggers, area: true, rows: 2, prefix: p }) + fld('backoutActions', 'Acciones previstas para revertir', { value: e.backoutActions, area: true, rows: 3, prefix: p, hint: 'Una por línea.' }) + fld('backoutVersion', 'Versión o configuración a recuperar', { value: e.backoutVersion, prefix: p }) + fld('backoutResponsible', 'Responsable de la reversión', { value: e.backoutResponsible, prefix: p }) + fld('backoutData', 'Precauciones respecto a los datos', { value: e.backoutData, area: true, rows: 2, prefix: p }) + fld('backoutVerification', 'Verificación posterior a la reversión', { value: e.backoutVerification, area: true, rows: 2, prefix: p }) + fld('backoutAlternative', 'Estrategia de recuperación o mitigación (si no hay reversión sencilla)', { value: e.backoutAlternative, area: true, rows: 2, prefix: p }) +
       `<h3 class="full">Plan de pruebas</h3>` + fld('testObjective', 'Objetivo de las pruebas', { value: e.testObjective, area: true, rows: 2, prefix: p }) + fld('testTypes', 'Tipos de prueba previstos', { value: e.testTypes, prefix: p }) + fld('testCriteria', 'Criterios de aceptación', { value: e.testCriteria?.length ? e.testCriteria : r.acceptanceCriteria, area: true, rows: 3, prefix: p, hint: 'Uno por línea; se reutilizan los del CRF técnico.' }) + fld('testSuccess', 'Condiciones de éxito', { value: e.testSuccess, area: true, rows: 2, prefix: p }) + fld('testEvidence', 'Evidencias esperadas', { value: e.testEvidence, prefix: p }) +
-      `<h3 class="full">Programación</h3>` + fld('downtimeValue', 'Tiempo de inactividad previsto', { value: e.downtimeValue, type: 'number', min: 0, step: '1', prefix: p, hint: 'Puede ser cero. No es la duración total.' }) + fld('downtimeUnit', 'Unidad', { value: e.downtimeUnit || 'minutos', options: CAT.DOWNTIME_UNITS, prefix: p }) + fld('plannedDate', 'Fecha y hora prevista de implementación', { value: e.plannedDate, type: 'datetime-local', prefix: p }) + fld('targetVersion', 'Versión objetivo', { value: e.targetVersion, prefix: p, hint: 'MAJOR.MINOR.PATCH o «Pendiente». No crea una línea base.' }))}
+      `<h3 class="full">Programación</h3>` + fld('downtimeValue', 'Tiempo de inactividad previsto', { value: e.downtimeValue, type: 'number', min: 0, step: '1', prefix: p, hint: 'Puede ser cero. No es la duración total.' }) + fld('downtimeUnit', 'Unidad', { value: e.downtimeUnit || 'minutos', options: CAT.DOWNTIME_UNITS, prefix: p }) + fld('plannedDate', 'Fecha y hora prevista de implementación', { value: e.plannedDate, type: 'datetime-local', prefix: p }) + fld('targetVersion', 'Versión objetivo', { value: e.targetVersion, prefix: p, hint: `MAJOR.MINOR.PATCH o «Pendiente»${r.currentVersion && r.currentVersion !== 'No determinada' ? `; mayor que ${esc(r.currentVersion)}` : ''}. No crea una línea base.`, attrs: versionAttr({ allow: ['Pendiente'], gt: r.currentVersion }) }))}
     </fieldset>${editable ? `<div class="form-actions sticky-actions"><button class="btn" type="submit" name="step" value="draft">${icon('save')} Guardar borrador</button>${r.status === 'En análisis' ? `<button class="btn primary" type="submit" name="step" value="analysis">Completar análisis</button>` : ''}<button class="btn primary" type="submit" name="step" value="planning">Completar análisis y planificación</button></div>` : ''}</form>
-    ${section('D', 'Decisión y autorización', r.status === 'Pendiente de aprobación' ? 'Una única decisión oficial vigente; las anteriores se conservan.' : 'Aprobar requiere completar la planificación. Rechazar o pedir información está disponible durante la evaluación.', editable ? `<form id="decision-form" class="full fields" novalidate>${formAlert()}${radios('decision', 'Decisión', CAT.DECISIONS, '', { prefix: 'de', descriptions: { 'Aprobado': 'Autoriza la ejecución sin restricciones.', 'Aprobado con condiciones': 'Autoriza sujeto a condiciones verificables.', 'Rechazado': 'No se autoriza; exige motivo.', 'Más información': 'Devuelve al iniciador; no es un rechazo.' } })}${fld('justification', 'Justificación de la decisión', { area: true, required: true, prefix: 'de' })}<div id="conditions-box" class="full" hidden>${fld('conditions', 'Condiciones (una por línea: condición | cómo se comprobará)', { area: true, rows: 3, prefix: 'de', placeholder: 'Respaldar la base antes de migrar | Evidencia del respaldo en la revisión' })}</div><div id="exception-box" class="full" hidden>${callout('danger', 'La viabilidad técnica está marcada como «No viable». Aprobar requiere una excepción explícita y la revisión del análisis.')}${fld('feasibilityException', 'Explicación de la excepción', { area: true, prefix: 'de' })}${check('analysisReviewed', 'Revisé el análisis y dejo constancia de la excepción', false, { prefix: 'de' })}</div><div class="form-actions full"><button class="btn primary" type="submit">${icon('shield')} Registrar decisión</button></div></form>` : `<div class="full">${auth ? `<p><strong>Decisión vigente:</strong> ${esc(auth.decision)} · ${esc(auth.decidedBy)} · ${dateLabel(auth.at, true)}</p>` : '<p class="hint">Sin decisión vigente.</p>'}</div>`)}
+    ${section('D', 'Decisión y autorización', r.status === 'Pendiente de aprobación' ? 'Una única decisión oficial vigente; las anteriores se conservan.' : 'Aprobar requiere completar la planificación. Rechazar o pedir información está disponible durante la evaluación.', editable ? `<form id="decision-form" class="full fields" novalidate>${formAlert()}${radios('decision', 'Decisión', CAT.DECISIONS, '', { prefix: 'de', descriptions: { 'Aprobado': 'Autoriza la ejecución sin restricciones.', 'Aprobado con condiciones': 'Autoriza sujeto a condiciones verificables.', 'Rechazado': 'No se autoriza; exige motivo.', 'Más información': 'Devuelve al iniciador; no es un rechazo.' } })}${fld('justification', 'Justificación de la decisión', { area: true, required: true, prefix: 'de' })}<div id="conditions-box" class="full" hidden>${fld('conditions', 'Condiciones (una por línea: condición | cómo se comprobará)', { area: true, rows: 3, prefix: 'de', placeholder: 'Respaldar la base antes de migrar | Evidencia del respaldo en la revisión' })}</div><div id="exception-box" class="full" hidden>${callout('danger', '<strong>No se puede aprobar:</strong> la viabilidad técnica está marcada como «No viable». Corrige el análisis en la sección B (y guarda la ficha) o rechaza la solicitud.')}</div><div class="form-actions full"><button class="btn primary" type="submit">${icon('shield')} Registrar decisión</button></div></form>` : `<div class="full">${auth ? `<p><strong>Decisión vigente:</strong> ${esc(auth.decision)} · ${esc(auth.decidedBy)} · ${dateLabel(auth.at, true)}</p>` : '<p class="hint">Sin decisión vigente.</p>'}</div>`)}
     ${section('E', 'Asignación del desarrollador', 'Disponible después de aprobar, desde el expediente.', `<div class="full">${(r.assignments || []).length ? `<p>Responsable vigente: <strong>${esc(lastAssignment(r)?.developerName || 'ninguno')}</strong></p>` : '<p class="hint">Sin asignación.</p>'}<a class="btn" href="#detalle/${esc(r.id)}">Ir al expediente para asignar</a></div>`)}`;
   const form = document.querySelector('#eval-form');
   const refreshUi = () => {
@@ -561,9 +642,18 @@ async function ficha(id) {
     const s = suggestPriority(d.impact, d.urgency);
     document.querySelector('#priority-suggestion').textContent = s ? `Sugerencia orientativa según impacto y urgencia: ${s}. El CCC decide la prioridad.` : '';
     const dec = document.querySelector('#decision-form');
-    if (dec) { const v = collect(dec).decision; document.querySelector('#conditions-box').hidden = v !== 'Aprobado con condiciones'; document.querySelector('#exception-box').hidden = !(v?.startsWith('Aprobado') && (e.feasibility === 'No viable' || d.feasibility === 'No viable')); }
+    const feasible = d.feasibility || e.feasibility;
+    document.querySelector('#feas-warning').hidden = feasible !== 'No viable';
+    if (dec) {
+      const v = collect(dec).decision, blocked = !!v?.startsWith('Aprobado') && (e.feasibility === 'No viable' || feasible === 'No viable');
+      document.querySelector('#conditions-box').hidden = v !== 'Aprobado con condiciones';
+      document.querySelector('#exception-box').hidden = !blocked;
+      const submit = dec.querySelector('button[type="submit"]'); if (submit) submit.disabled = blocked;
+      const radio = dec.querySelector('#de-decision');
+      if (radio) { if (blocked) markField(dec, radio, 'Un cambio no viable no puede aprobarse.'); else if (radio.getAttribute('aria-invalid') === 'true') clearField(dec, radio); }
+    }
   };
-  form.addEventListener('change', refreshUi); document.querySelector('#decision-form')?.addEventListener('change', refreshUi); refreshUi();
+  form.addEventListener('change', refreshUi); document.querySelector('#decision-form')?.addEventListener('change', refreshUi); bindPickers(); refreshUi();
   const evalBody = () => {
     const d = collect(form), ids = (d.potentialIds || []).map(Number);
     const body = { ...d, potentialIcs: ids.map(icsId => ({ icsId, operation: d[`op-${icsId}`] })) };
@@ -582,6 +672,8 @@ async function ficha(id) {
   form.onsubmit = async event => {
     event.preventDefault();
     const step = event.submitter?.value || 'draft';
+    const vErr = fieldError(form.querySelector(`#${p}-targetVersion`));
+    if (vErr) { validate(form, { [`${p}-targetVersion`]: vErr }); return; }
     const result = await saveAction(`/requests/${r.id}/evaluation`, { ...evalBody(), step, revision: r.revision }, 'POST', form);
     if (result) { toast({ draft: 'Borrador guardado: no se marca como completado.', analysis: 'Análisis completado; continúa con la planificación.', planning: 'Ficha completa: pendiente de decisión.' }[step]); await ficha(r.id); }
   };
@@ -592,7 +684,7 @@ async function ficha(id) {
     const conditions = d.decision === 'Aprobado con condiciones' ? d.conditions.split(/\n+/).map(l => l.trim()).filter(Boolean).map(l => { const [textValue, verification] = l.split('|').map(x => (x || '').trim()); return { text: textValue, verification }; }) : [];
     if (conditions.some(c => !c.verification)) { validate(dec, { 'de-conditions': 'Cada condición necesita «| cómo se comprobará».' }); return; }
     if (!ask(`¿Registrar la decisión «${d.decision}»? Quedará en el historial y no podrá borrarse.`)) return;
-    const result = await saveAction(`/requests/${r.id}/decision`, { decision: d.decision, justification: d.justification, conditions, feasibilityException: d.feasibilityException, analysisReviewed: d.analysisReviewed, revision: r.revision }, 'POST', dec);
+    const result = await saveAction(`/requests/${r.id}/decision`, { decision: d.decision, justification: d.justification, conditions, revision: r.revision }, 'POST', dec);
     if (result) { toast('Decisión registrada.'); location.hash = `detalle/${r.id}`; }
   });
 }
@@ -646,7 +738,7 @@ async function baselines() {
   try { [list, ICS] = await Promise.all([api('/baselines').then(x => x.baselines), api('/ics')]); } catch (e) { toast(e.message, true); }
   if (stale(seq)) return;
   const eligible = ICS.items.filter(i => ['Identificado', 'Bajo control de configuración'].includes(i.status) && i.current_revision_id);
-  const picker = (prefix, chosen = new Map()) => `<fieldset class="field full"><legend>ICS y revisión incluida</legend><div class="pick-list">${eligible.map(i => `<label class="pick"><input type="checkbox" data-group="items" value="${chosen.get(i.id) || i.current_revision_id}" ${chosen.has(i.id) ? 'checked' : ''}> <strong>${esc(i.code)}</strong> ${esc(i.name)} · revisión <code>${esc(i.currentRevision)}</code></label>`).join('') || '<p class="hint">No hay ICS identificados con revisión.</p>'}</div><small class="hint">Se incluye la revisión vigente de cada ICS. Un ICS identificado no pertenece automáticamente a una línea base.</small></fieldset>`;
+  const picker = (prefix, chosen = new Map()) => `<div class="field full"><span class="field-label">ICS y revisión incluida</span><small class="hint">Se incluye la revisión vigente de cada ICS. Un ICS identificado no pertenece automáticamente a una línea base.</small>${icsPicker({ group: 'items', items: eligible, checked: i => chosen.has(i.id), value: i => chosen.get(i.id) || i.current_revision_id, empty: 'No hay ICS identificados con revisión.' })}</div>`;
   main.innerHTML = heading('Líneas base', 'Configuraciones revisadas y aprobadas formalmente que sirven de referencia.') +
     callout('info', 'Una versión de software o un commit no constituyen por sí mismos una línea base. La composición de una línea base aprobada no se modifica: para incorporar cambios se crea una nueva, derivada de la anterior.') +
     (isCommittee() ? `<details class="card create-card"><summary><strong>${icon('plus')} Proponer línea base</strong></summary><form id="lb-form" class="fields detail-body" novalidate>${formAlert()}${fld('name', 'Nombre', { required: true, prefix: 'lb' })}${fld('softwareVersion', 'Versión de software relacionada', { prefix: 'lb', placeholder: 'MAJOR.MINOR.PATCH' })}${fld('derivedFrom', 'Derivar de una línea base aprobada', { options: list.filter(b => b.status === 'Aprobada').map(b => [b.code, `${b.code} · ${b.name}`]), prefix: 'lb', hint: 'Si eliges una, se copian sus ICS con las revisiones vigentes actuales.' })}${fld('description', 'Descripción', { area: true, rows: 2, prefix: 'lb' })}${picker('lb')}<div class="form-actions full"><button class="btn primary" type="submit">Crear borrador</button></div></form></details>` : '') +
@@ -659,6 +751,7 @@ async function baselines() {
     bindForm(`#lb-items-${b.id}`, async form => { const result = await saveAction(`/baselines/${b.code}/items`, { items: items(form) }, 'POST', form); if (result) { toast('Composición guardada.'); baselines(); } });
     bindForm(`#lb-decide-${b.id}`, async form => { if (!validate(form)) return; if (!ask('La decisión es definitiva y congela la composición. ¿Continuar?')) return; const result = await saveAction(`/baselines/${b.code}/decide`, collect(form), 'POST', form); if (result) { toast('Decisión registrada.'); baselines(); } });
   }
+  bindPickers();
   document.querySelectorAll('[data-lb-submit]').forEach(btn => btn.onclick = async () => { if (!ask('¿Enviar a revisión? La composición ya no podrá cambiar.')) return; if (await saveAction(`/baselines/${btn.dataset.lbSubmit}/submit`, {}, 'POST', btn.closest('form'))) { toast('Enviada a revisión.'); baselines(); } });
   document.querySelectorAll('[data-lb-delete]').forEach(btn => btn.onclick = async () => { if (!ask('¿Eliminar el borrador?')) return; if (await saveAction(`/baselines/${btn.dataset.lbDelete}/delete`, {}, 'POST', btn.closest('form'))) { toast('Borrador eliminado.'); baselines(); } });
 }
@@ -700,11 +793,10 @@ function route() {
   if (!currentUser) {
     if (view === 'nueva') requestForm(null, 'usuario');
     else if (view === 'seguimiento') tracking();
-    else if (['', 'panel'].includes(view)) publicDashboard();
-    else loginScreen();
+    else { if (view !== 'login') window.history?.replaceState?.(null, '', '#login'); loginScreen(); }
   } else if (view === 'solicitudes') listing();
   else if (view === 'nueva') requestForm(null, currentUser.role);
-  else if (view === 'editar') { const r = store.requests.find(x => x.id === id); if (r && r.ownerId === currentUser.id && r.status === 'Registrada') requestForm(r); else main.innerHTML = heading('Petición bloqueada', 'Solo el solicitante puede editarla y únicamente antes de que el CCC la reciba.') + `<a class="btn" href="#detalle/${esc(id || '')}">Volver</a>`; }
+  else if (view === 'editar') { const r = store.requests.find(x => x.id === id); if (r && ((r.ownerId === currentUser.id && r.status === 'Registrada') || (isCommittee() && r.ownerId !== currentUser.id && r.status !== 'Cerrada'))) requestForm(r); else main.innerHTML = heading('Petición bloqueada', 'El solicitante solo puede editarla antes de que el CCC la reciba; el CCC puede corregirla mientras no esté cerrada.') + `<a class="btn" href="#detalle/${esc(id || '')}">Volver</a>`; }
   else if (view === 'detalle' && id) detail(id);
   else if (view === 'ficha' && id) ficha(id);
   else if (view === 'ics' && id) icsDetail(id);
@@ -724,6 +816,10 @@ document.querySelector('#delete-dialog').addEventListener('close', async event =
   event.target.returnValue = '';
 });
 document.querySelectorAll('[data-icon]').forEach(el => el.innerHTML = icon(el.dataset.icon));
+// Validación en vivo: al salir de un campo se marca en rojo si está mal; al corregirlo se limpia.
+document.addEventListener('focusout', event => { const el = event.target; if (!el?.form || !el.id || !el.name || el.type === 'radio') return; const message = fieldError(el); if (message) markField(el.form, el, message); else if (el.getAttribute('aria-invalid') === 'true') clearField(el.form, el); });
+document.addEventListener('input', event => { const el = event.target; if (el?.form && el.getAttribute?.('aria-invalid') === 'true' && !fieldError(el)) clearField(el.form, el); });
+document.addEventListener('change', event => { const el = event.target; if (el?.type === 'radio' && el.form) { const first = el.form.querySelector(`#${el.dataset.err}`); if (first?.getAttribute('aria-invalid') === 'true' && el.form.querySelector(`#${el.dataset.err}-error`)?.textContent === 'Selecciona una opción.') clearField(el.form, first); } });
 window.addEventListener('hashchange', () => { route(); refreshPanel(); });
 window.addEventListener('focus', refreshPanel);
 document.addEventListener('visibilitychange', refreshPanel);

@@ -23,7 +23,7 @@ Verificado con Node.js 24 y 25. Algunas versiones muestran una advertencia exper
 npm start
 ```
 
-3. Abre la dirección que muestra la consola (por defecto `http://127.0.0.1:3000`). Abrir `index.html` directamente no funciona: la autenticación y la API requieren el servidor.
+3. Abre la dirección que muestra la consola (por defecto `http://127.0.0.1:3000`). Sin sesión se abre el inicio de sesión; desde ahí se puede presentar o consultar una solicitud sin cuenta. Abrir `index.html` directamente no funciona: la autenticación y la API requieren el servidor.
 
 Otros comandos:
 
@@ -67,9 +67,9 @@ Concentrar análisis y autorización en el CCC es una simplificación académica
 
 ## Funcionalidades
 
-- **CRF de usuario final y técnico** con una estructura compartida. El servidor genera el código, la fecha y la identidad. El formulario técnico añade el tipo de modificación (adición/modificación/eliminación), los ICS potencialmente afectados (del catálogo o sugeridos), entorno, versiones (o «No determinada»), spec, reglas de negocio y criterios de aceptación. El contenido original no se modifica después de la recepción.
+- **CRF de usuario final y técnico** con una estructura compartida. El servidor genera el código, la fecha y la identidad; estos datos no aparecen como campos del formulario. La casilla «La funcionalidad solicitada todavía no existe» distingue una funcionalidad nueva de un error o ajuste. El formulario técnico añade el tipo de modificación (adición/modificación/eliminación), los ICS potencialmente afectados (del catálogo o sugeridos), entorno, versiones (o «No determinada»), spec, reglas de negocio y criterios de aceptación. El solicitante no lo modifica después de la recepción; el CCC puede corregir cualquier campo indicando el motivo, y los datos originales se conservan.
 - **Ficha única del CCC** (secciones A–E): clasificación ITIL estándar/normal/emergencia, impacto técnico y funcional, riesgos, urgencia, prioridad (con una sugerencia orientativa), viabilidad, esfuerzo y duración, rollout, backout, plan de pruebas, inactividad, fecha y versión objetivo. Permite guardar borradores, y la decisión forma parte de la misma ficha.
-- **Decisiones coherentes:** aprobar exige un análisis y una planificación completos. Un cambio no viable requiere una excepción explícita. Las condiciones incluyen su forma de verificación. «Más información» no es un rechazo. Las reevaluaciones conservan las decisiones anteriores.
+- **Decisiones coherentes:** aprobar exige un análisis y una planificación completos. Un cambio no viable no puede aprobarse: el sistema informa el error. Las condiciones incluyen su forma de verificación. «Más información» no es un rechazo. Las reevaluaciones conservan las decisiones anteriores.
 - **Implementación por rondas** con actividades, referencias de GitHub registradas manualmente (no verificadas), ICS realmente modificados con revisión anterior y nueva, y desviaciones de alcance que el CCC debe autorizar.
 - **Pruebas** cuyas ejecuciones se conservan. Las fallidas devuelven la solicitud a correcciones.
 - **Revisión postimplementación**, **backout ejecutado** (documentado, no simulado) y **cierre** exitoso, fallido o incompleto, separado del resultado de autorización y del administrativo. El CCC puede reabrir una solicitud cerrada.
@@ -87,11 +87,10 @@ Las rutas autenticadas que modifican datos requieren el encabezado `X-CSRF-Token
 | `GET /api/catalog` | Catálogos (módulos, estados, ITIL, etc.) |
 | `POST /api/public/requests` | CRF sin cuenta. Devuelve código, fecha, estado y clave de seguimiento |
 | `POST /api/public/track` · `/api/public/track/clarification` | Consulta limitada y respuesta del solicitante sin cuenta (código y clave) |
-| `GET /api/public/dashboard` | Totales agregados, sin datos personales |
 | `POST /api/auth/login` · `GET /api/auth/me` · `POST /api/auth/logout` | Sesión |
 | `GET /api/requests` · `POST /api/requests` | Listado visible según el rol · crear CRF |
 | `GET /api/requests/:id` | Expediente con ICS, adjuntos, auditoría y auditoría de configuración |
-| `PATCH` / `DELETE /api/requests/:id` | Editar o eliminar un CRF propio aún no recibido |
+| `PATCH` / `DELETE /api/requests/:id` | Editar o eliminar un CRF propio aún no recibido; el CCC corrige con `PATCH` y `correctionReason` |
 | `POST /api/requests/:id/:acción` | `receive`, `validate`, `request-info`, `clarification`, `evaluation` (`step`: draft/analysis/planning), `decision`, `reevaluate`, `assign`, `start`, `activity`, `git`, `ics-change`, `deviation`, `scope`, `send-to-tests`, `test`, `finish-tests`, `backout`, `review`, `close`, `close-rejected`, `reopen` |
 | `POST /api/requests/:id/attachments` · `GET /api/attachments/:id` | Subir y descargar archivos |
 | `GET`/`POST /api/ics`, `GET`/`PATCH /api/ics/:código`, `POST /api/ics/:código/revisions`, `POST`/`DELETE /api/ics/:código/relations` | Catálogo de ICS |

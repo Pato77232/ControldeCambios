@@ -94,7 +94,11 @@ test('CRF: validaciones, códigos únicos, identidad del iniciador y bloqueo tra
     assert.equal((await t.ana.call('/api/requests', 'POST', { ...userCrf, requesterType: 'experto' })).status, 403);
     assert.equal((await t.leslie.call('/api/requests', 'POST', devCrf({ acceptanceCriteria: [] }))).status, 400);
     assert.equal((await t.leslie.call('/api/requests', 'POST', devCrf({ suggestedIcsText: '' }))).status, 400, 'requiere ICS o sugerencia');
-    assert.equal((await t.leslie.call('/api/requests', 'POST', devCrf({ currentVersion: '1.0' }))).status, 400);
+    for (const [extra, field] of [[{ currentVersion: '1.0' }, 'currentVersion'], [{ currentVersion: '01.2.0' }, 'currentVersion'], [{ currentVersion: '1.2.0', targetVersion: '1.2.0' }, 'targetVersion'], [{ currentVersion: '1.2.0', targetVersion: '1.1.9' }, 'targetVersion'], [{ module: 'Inventado' }, 'module']]) {
+      const bad = await t.leslie.call('/api/requests', 'POST', devCrf(extra));
+      assert.equal(bad.status, 400); assert.equal(bad.data.field, field, 'el servidor indica el campo con error');
+    }
+    assert.equal((await t.leslie.call('/api/requests', 'POST', devCrf({ currentVersion: '1.2.0', targetVersion: '1.10.0' }))).status, 201, '1.10.0 es mayor que 1.2.0');
     assert.equal((await t.leslie.call('/api/requests', 'POST', devCrf({ businessRulesAffected: true }))).status, 400);
     // Fallo 4: el único CCC no puede presentar solicitudes que nadie podría evaluar.
     assert.equal((await t.david.call('/api/requests', 'POST', devCrf())).status, 403);
@@ -115,6 +119,18 @@ test('CRF: validaciones, códigos únicos, identidad del iniciador y bloqueo tra
     assert.equal(after.status, 'En validación');
     assert.equal((await t.leslie.call(`/api/requests/${r.id}`, 'DELETE', { revision: after.revision })).status, 409);
     assert.equal((await t.leslie.call(`/api/requests/${r.id}`, 'PATCH', { ...devCrf(), revision: after.revision })).status, 409);
+    // El CCC puede corregir cualquier CRF abierto (técnico o de usuario final), con motivo y conservando el original.
+    const sinMotivo = await t.david.call(`/api/requests/${r.id}`, 'PATCH', { ...devCrf({ title: 'Título corregido por el CCC' }), revision: after.revision });
+    assert.equal(sinMotivo.status, 400); assert.equal(sinMotivo.data.field, 'correctionReason');
+    const corrected = await t.david.call(`/api/requests/${r.id}`, 'PATCH', { ...devCrf({ title: 'Título corregido por el CCC', environment: 'Producción' }), correctionReason: 'El entorno afectado real es producción.', revision: after.revision });
+    assert.equal(corrected.status, 200, corrected.data.error);
+    const c = corrected.data.request;
+    assert.equal(c.title, 'Título corregido por el CCC'); assert.equal(c.original.title, 'Título corregido'); assert.equal(c.original.environment, 'Pruebas');
+    assert.deepEqual(c.corrections[0].fields, ['title', 'environment']); assert.equal(c.name, 'Leslie', 'la identidad del iniciador no cambia');
+    assert.ok((await t.david.call(`/api/requests/${r.id}`)).data.audit.some(e => e.action === 'Corrección del CCC' && e.field === 'environment' && e.old_value === 'Pruebas'));
+    const fromUser = (await t.ana.call('/api/requests', 'POST', userCrf)).data.request;
+    assert.equal((await t.david.call(`/api/requests/${fromUser.id}`, 'PATCH', { ...userCrf, title: 'Cancelación de boletos comprados', correctionReason: 'Título más preciso para el catálogo.', revision: fromUser.revision })).status, 200);
+    assert.equal((await t.pablo.call(`/api/requests/${fromUser.id}`, 'PATCH', { ...userCrf, correctionReason: 'Intento de un desarrollador.', revision: fromUser.revision + 1 })).status, 403);
     // Una solicitud sin recibir sí puede eliminarse; el evento queda en la auditoría.
     const del = (await t.leslie.call(`/api/requests/${ids[1]}`)).data.request;
     assert.equal((await t.leslie.call(`/api/requests/${ids[1]}`, 'DELETE', { revision: del.revision })).status, 200);
@@ -178,14 +194,21 @@ test('ficha única del CCC: borrador, análisis, planificación y decisiones coh
     const changed = await t.david.ok(id, 'evaluation', { ...fullPlan([{ icsId: ics.id, operation: 'Modificación' }]), impact: 'Alto', step: 'draft' });
     assert.equal(changed.status, 'En planificación');
     await t.david.ok(id, 'evaluation', { ...fullPlan([{ icsId: ics.id, operation: 'Modificación' }]), feasibility: 'No viable', step: 'planning' });
-    // Caso D: un cambio no viable no se aprueba silenciosamente.
-    assert.equal((await t.david.act(id, 'decision', { decision: 'Aprobado', justification: 'Se aprueba igualmente.' })).status, 400);
+    // Caso D: un cambio no viable no puede aprobarse, ni siquiera con condiciones; se informa el error.
+    for (const decision of ['Aprobado', 'Aprobado con condiciones']) {
+      const blocked = await t.david.act(id, 'decision', { decision, justification: 'Se aprueba igualmente.', conditions: [{ text: 'X', verification: 'Y' }] });
+      assert.equal(blocked.status, 409); assert.match(blocked.data.error, /No viable/); assert.equal(blocked.data.field, 'decision');
+    }
+    // Versión objetivo: formato válido y mayor que la versión actual del CRF.
+    const badVersion = await t.david.act(id, 'evaluation', { ...fullPlan([{ icsId: ics.id, operation: 'Modificación' }]), targetVersion: '1.3', step: 'draft' });
+    assert.equal(badVersion.status, 400); assert.equal(badVersion.data.field, 'targetVersion');
+    await t.david.ok(id, 'evaluation', { ...fullPlan([{ icsId: ics.id, operation: 'Modificación' }]), step: 'planning' });
     assert.equal((await t.david.act(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Se aprueba con condiciones.', conditions: [{ text: 'Respaldo', verification: '' }] })).status, 400);
-    assert.equal((await t.david.act(id, 'decision', { decision: 'Aprobado', justification: 'Con condiciones ocultas.', conditions: [{ text: 'X', verification: 'Y' }], feasibilityException: 'Excepción académica justificada por el docente para la demostración.', analysisReviewed: true })).status, 400);
-    const approved = await t.david.ok(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Se aprueba con una excepción documentada.', conditions: [{ text: 'Respaldar la base', verification: 'Evidencia en la revisión' }], feasibilityException: 'Excepción académica justificada por el docente para la demostración.', analysisReviewed: true });
+    assert.equal((await t.david.act(id, 'decision', { decision: 'Aprobado', justification: 'Con condiciones ocultas.', conditions: [{ text: 'X', verification: 'Y' }] })).status, 400);
+    const approved = await t.david.ok(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Beneficio alto con riesgo controlado.', conditions: [{ text: 'Respaldar la base', verification: 'Evidencia en la revisión' }] });
     assert.equal(approved.status, 'Aprobada con condiciones');
     const decision = approved.decisions.at(-1);
-    assert.equal(decision.conditions[0].id, 'C1'); assert.match(decision.feasibilityException, /Excepción/); assert.equal(decision.evaluationSnapshot.feasibility, 'No viable');
+    assert.equal(decision.conditions[0].id, 'C1'); assert.equal(decision.evaluationSnapshot.feasibility, 'Viable');
     assert.deepEqual(approved.ics.autorizado, [ics.code]);
     // Reevaluar conserva la decisión anterior como sustituida.
     const re = await t.david.ok(id, 'reevaluate', { reason: 'Cambió la disponibilidad del equipo.' });

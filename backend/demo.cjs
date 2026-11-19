@@ -75,7 +75,7 @@ function buildDemo(db) {
 
   // Ejemplo 3: pruebas fallidas, correcciones y nueva ronda.
   const e3 = tx(() => S.createRequest(db, shirley, { requesterType: 'experto', module: 'Buses y plantillas de asientos', title: 'Marcar asientos preferenciales', currentBehavior: 'Todos los asientos se muestran iguales.', description: 'Distinguir visualmente los asientos preferenciales en el selector.', justification: 'Facilitar la compra a personas con discapacidad y adultos mayores.', result: 'Asientos preferenciales identificados.', modificationType: 'Modificación', environment: 'Pruebas', currentVersion: '2.0.1', targetVersion: '2.1.0', acceptanceCriteria: ['Los asientos preferenciales tienen un icono distinto'], suggestedIcs: [asientos.id] })).request.id;
-  toApproval(e3, { potentialIcs: [{ icsId: asientos.id, operation: 'Modificación' }], impact: 'Bajo', priority: 'Media', testCriteria: ['Los asientos preferenciales tienen un icono distinto'] });
+  toApproval(e3, { potentialIcs: [{ icsId: asientos.id, operation: 'Modificación' }], impact: 'Bajo', priority: 'Media', targetVersion: '2.1.0', testCriteria: ['Los asientos preferenciales tienen un icono distinto'] });
   act(e3, 'decision', david, { decision: 'Aprobado', justification: 'Cambio acotado con beneficio de accesibilidad.' });
   act(e3, 'assign', david, { developerId: shirley.id });
   act(e3, 'start', shirley);

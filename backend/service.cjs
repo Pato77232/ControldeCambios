@@ -7,8 +7,9 @@ const { SCHEMA, crfCode } = require('./migrate.cjs');
 const { audit, auditChanges } = require('./audit.cjs');
 const files = require('./files.cjs');
 
-class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
-const fail = (status, message) => { throw new HttpError(status, message); };
+// `field` identifica el campo con error para que el cliente lo marque en rojo.
+class HttpError extends Error { constructor(status, message, field) { super(message); this.status = status; if (field) this.field = field; } }
+const fail = (status, message, field) => { throw new HttpError(status, message, field); };
 const now = () => new Date().toISOString();
 const localDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Guayaquil', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const digest = v => createHash('sha256').update(v).digest('hex');
@@ -19,33 +20,34 @@ const nameOf = u => u ? (u.id ? u.name : `${u.name} (sin cuenta)`) : 'Sistema';
 // ---------- Validación de entrada ----------
 function str(data, key, { required = false, max = 5000, min = 0, label = key } = {}) {
   const v = data[key];
-  if (v !== undefined && v !== null && typeof v !== 'string') fail(400, `Campo inválido: ${label}.`);
+  if (v !== undefined && v !== null && typeof v !== 'string') fail(400, `Campo inválido: ${label}.`, key);
   const s = (v || '').trim();
-  if (required && !s) fail(400, `${label}: este campo es obligatorio.`);
-  if (s.length > max) fail(400, `${label}: máximo ${max} caracteres.`);
-  if (s && s.length < min) fail(400, `${label}: escribe al menos ${min} caracteres.`);
+  if (required && !s) fail(400, `${label}: este campo es obligatorio.`, key);
+  if (s.length > max) fail(400, `${label}: máximo ${max} caracteres.`, key);
+  if (s && s.length < min) fail(400, `${label}: escribe al menos ${min} caracteres.`, key);
   return s;
 }
-function pick(value, values, label, required = true) {
+function pick(value, values, label, opt = true) {
+  const { required = true, field } = typeof opt === 'object' ? opt : { required: opt };
   if ((value === undefined || value === null || value === '') && !required) return '';
-  if (!values.includes(value)) fail(400, `Selecciona ${label} válido.`);
+  if (!values.includes(value)) fail(400, `Selecciona ${label} válido.`, field);
   return value;
 }
 function list(data, key, { required = false, max = 40, label = key } = {}) {
   let v = data[key];
   if (v === undefined || v === null || v === '') v = [];
   if (typeof v === 'string') v = v.split(/\r?\n/);
-  if (!Array.isArray(v) || v.some(x => typeof x !== 'string')) fail(400, `Campo inválido: ${label}.`);
+  if (!Array.isArray(v) || v.some(x => typeof x !== 'string')) fail(400, `Campo inválido: ${label}.`, key);
   const out = v.map(x => x.trim()).filter(Boolean);
-  if (out.length > max || out.some(x => x.length > 2000)) fail(400, `${label}: demasiados elementos o elementos demasiado largos.`);
-  if (required && !out.length) fail(400, `${label}: agrega al menos un elemento.`);
+  if (out.length > max || out.some(x => x.length > 2000)) fail(400, `${label}: demasiados elementos o elementos demasiado largos.`, key);
+  if (required && !out.length) fail(400, `${label}: agrega al menos un elemento.`, key);
   return out;
 }
 function num(data, key, { required = false, label = key, max = 100000 } = {}) {
   const v = data[key];
-  if (v === undefined || v === null || v === '') { if (required) fail(400, `${label}: este campo es obligatorio.`); return null; }
+  if (v === undefined || v === null || v === '') { if (required) fail(400, `${label}: este campo es obligatorio.`, key); return null; }
   const n = Number(v);
-  if (!Number.isFinite(n) || n < 0 || n > max) fail(400, `${label}: ingresa un número entre 0 y ${max}.`);
+  if (!Number.isFinite(n) || n < 0 || n > max) fail(400, `${label}: ingresa un número entre 0 y ${max}.`, key);
   return Math.round(n * 100) / 100;
 }
 function link(value, label) {
@@ -54,10 +56,18 @@ function link(value, label) {
   if (!['https:', 'http:'].includes(u.protocol)) fail(400, `${label}: usa una URL http o https.`);
   return u.href;
 }
-function isoDate(value, label, notBefore) {
+function isoDate(value, label, notBefore, field) {
   if (!value) return '';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value) fail(400, `${label}: fecha inválida.`);
-  if (notBefore && value < notBefore) fail(400, `${label}: no puede ser anterior al ${notBefore}.`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value) fail(400, `${label}: fecha inválida.`, field);
+  if (notBefore && value < notBefore) fail(400, `${label}: no puede ser anterior al ${notBefore}.`, field);
+  return value;
+}
+// Versiones semánticas MAJOR.MINOR.PATCH; una versión propuesta debe ser mayor que la actual.
+const semverCmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+function version(value, label, field, { allow = [], greaterThan } = {}) {
+  if (!value || allow.includes(value)) return value || '';
+  if (!C.SEMVER.test(value) || value.split('.').some(n => n.length > 6)) fail(400, `${label}: usa el formato MAJOR.MINOR.PATCH, por ejemplo 1.4.0${allow.length ? ` (o «${allow.join('» / «')}»)` : ''}.`, field);
+  if (greaterThan && C.SEMVER.test(greaterThan) && semverCmp(value, greaterThan) <= 0) fail(400, `${label}: debe ser mayor que la versión actual ${greaterThan}.`, field);
   return value;
 }
 const bool = v => v === true || v === 'true' || v === 'on';
@@ -134,32 +144,32 @@ function insertLink(db, number, icsId, kind, user, extra = {}) {
 // ---------- CRF ----------
 function requestFields(db, data, kind, date) {
   const f = { project: C.PROJECT };
-  f.module = pick(data.module, C.MODULES, 'un módulo afectado');
+  f.module = pick(data.module, C.MODULES, 'un módulo afectado', { field: 'module' });
   f.title = str(data, 'title', { required: true, max: 120, min: 5, label: 'Título' });
   f.currentBehavior = str(data, 'currentBehavior', { required: true, label: 'Situación o comportamiento actual' });
   f.featureMissing = bool(data.featureMissing);
   f.description = str(data, 'description', { required: true, min: 20, label: 'Descripción del cambio' });
   f.justification = str(data, 'justification', { required: true, min: 20, label: 'Justificación' });
   f.result = str(data, 'result', { required: true, label: 'Resultado esperado' });
-  f.desiredDate = isoDate(str(data, 'desiredDate', { max: 10, label: 'Fecha deseada' }), 'Fecha deseada', date);
+  f.desiredDate = isoDate(str(data, 'desiredDate', { max: 10, label: 'Fecha deseada' }), 'Fecha deseada', date, 'desiredDate');
   f.observations = str(data, 'observations', { label: 'Observaciones' });
   let suggested = [];
   if (kind === 'experto') {
-    f.modificationType = pick(data.modificationType, C.OPERATIONS, 'un tipo de modificación');
-    f.environment = pick(data.environment, C.ENVIRONMENTS, 'un entorno afectado');
+    f.modificationType = pick(data.modificationType, C.OPERATIONS, 'un tipo de modificación', { field: 'modificationType' });
+    f.environment = pick(data.environment, C.ENVIRONMENTS, 'un entorno afectado', { field: 'environment' });
     f.currentVersion = str(data, 'currentVersion', { required: true, max: 40, label: 'Versión actual' });
-    if (f.currentVersion !== 'No determinada' && !C.SEMVER.test(f.currentVersion)) fail(400, 'Versión actual: usa MAJOR.MINOR.PATCH o «No determinada».');
+    version(f.currentVersion, 'Versión actual', 'currentVersion', { allow: ['No determinada'] });
     f.targetVersion = str(data, 'targetVersion', { max: 40, label: 'Versión propuesta' });
-    if (f.targetVersion && !C.SEMVER.test(f.targetVersion)) fail(400, 'Versión propuesta: usa MAJOR.MINOR.PATCH.');
+    version(f.targetVersion, 'Versión propuesta', 'targetVersion', { greaterThan: f.currentVersion });
     f.spec = str(data, 'spec', { max: 3000, label: 'Especificación técnica' });
     f.specUrl = link(str(data, 'specUrl', { max: 500, label: 'Enlace de la especificación' }), 'Enlace de la especificación');
     f.businessRulesAffected = bool(data.businessRulesAffected);
     f.businessRules = f.businessRulesAffected ? str(data, 'businessRules', { required: true, max: 2000, label: 'Reglas de negocio afectadas' }) : 'No aplica';
     f.acceptanceCriteria = list(data, 'acceptanceCriteria', { required: true, label: 'Criterios de aceptación' });
     f.suggestedIcsText = str(data, 'suggestedIcsText', { max: 1000, label: 'ICS sugeridos no catalogados' });
-    f.proposedPriority = pick(data.proposedPriority || 'Media', C.LEVELS, 'una prioridad propuesta');
+    f.proposedPriority = pick(data.proposedPriority || 'Media', C.LEVELS, 'una prioridad propuesta', { field: 'proposedPriority' });
     suggested = validIcs(db, data.suggestedIcs || [], 'Componentes potencialmente afectados');
-    if (!suggested.length && !f.suggestedIcsText) fail(400, 'Componentes potencialmente afectados: selecciona al menos un ICS del catálogo o sugiere uno nuevo.');
+    if (!suggested.length && !f.suggestedIcsText) fail(400, 'Componentes potencialmente afectados: selecciona al menos un ICS del catálogo o sugiere uno nuevo.', 'suggestedIcs');
   }
   return { fields: f, suggested };
 }
@@ -206,15 +216,15 @@ const EVAL_LIST = { risks: 'Riesgos identificados', rolloutSteps: 'Actividades d
 const EVAL_ENUM = { itilType: [Object.keys(C.ITIL), 'un tipo de cambio ITIL'], impact: [C.IMPACT, 'un impacto'], urgency: [C.LEVELS, 'una urgencia'], priority: [C.LEVELS, 'una prioridad'], feasibility: [C.FEASIBILITY, 'una viabilidad'], downtimeUnit: [C.DOWNTIME_UNITS, 'una unidad de inactividad'] };
 const EVAL_NUM = { effortHours: 'Esfuerzo estimado (horas-persona)', durationDays: 'Duración estimada (días calendario)', downtimeValue: 'Tiempo de inactividad previsto' };
 const EVAL_KEYS = [...Object.keys(EVAL_TEXT), ...Object.keys(EVAL_LIST), ...Object.keys(EVAL_ENUM), ...Object.keys(EVAL_NUM), 'standardSameConditions'];
-function parseEvaluation(db, data) {
+function parseEvaluation(db, data, r) {
   const e = {};
   for (const [k, label] of Object.entries(EVAL_TEXT)) e[k] = str(data, k, { max: ['targetVersion', 'plannedDate'].includes(k) ? 40 : 5000, label });
   for (const [k, label] of Object.entries(EVAL_LIST)) e[k] = list(data, k, { label });
-  for (const [k, [values, label]] of Object.entries(EVAL_ENUM)) e[k] = pick(data[k], values, label, false);
+  for (const [k, [values, label]] of Object.entries(EVAL_ENUM)) e[k] = pick(data[k], values, label, { required: false, field: k });
   for (const [k, label] of Object.entries(EVAL_NUM)) e[k] = num(data, k, { label, max: k === 'durationDays' ? 3650 : 100000 });
   e.standardSameConditions = bool(data.standardSameConditions);
-  if (e.plannedDate && (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(e.plannedDate) || Number.isNaN(Date.parse(e.plannedDate)))) fail(400, 'Fecha prevista de implementación: fecha inválida.');
-  if (e.targetVersion && e.targetVersion !== 'Pendiente' && !C.SEMVER.test(e.targetVersion)) fail(400, 'Versión objetivo: usa MAJOR.MINOR.PATCH o «Pendiente».');
+  if (e.plannedDate && (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(e.plannedDate) || Number.isNaN(Date.parse(e.plannedDate)))) fail(400, 'Fecha prevista de implementación: fecha inválida.', 'plannedDate');
+  version(e.targetVersion, 'Versión objetivo', 'targetVersion', { allow: ['Pendiente'], greaterThan: r?.currentVersion });
   if (e.standardReference) e.standardReference = e.standardReference.toUpperCase();
   const raw = Array.isArray(data.potentialIcs) ? data.potentialIcs : [];
   if (raw.length > 50) fail(400, 'ICS potencialmente afectados: demasiados elementos.');
@@ -293,8 +303,8 @@ function syncPotential(db, r, number, potential, user) {
 function evaluationAction(db, r, number, user, data) {
   requireCCC(r, user);
   requireState(r, ['En análisis', 'En planificación', 'Pendiente de aprobación']);
-  const step = pick(data.step || 'draft', ['draft', 'analysis', 'planning'], 'una acción de la ficha');
-  const { e, potential } = parseEvaluation(db, data);
+  const step = pick(data.step || 'draft', ['draft', 'analysis', 'planning'], 'una acción de la ficha', { field: 'step' });
+  const { e, potential } = parseEvaluation(db, data, r);
   const before = r.evaluation || {};
   r.evaluation = { ...before, ...e, member: before.member || user.name, memberId: before.memberId || user.id, startedAt: before.startedAt || now(), updatedAt: now(), migrated: undefined };
   const changed = EVAL_KEYS.some(k => JSON.stringify(before[k] ?? null) !== JSON.stringify(e[k] ?? null));
@@ -305,7 +315,7 @@ function evaluationAction(db, r, number, user, data) {
   const missingA = missingAnalysis(r.evaluation, potential.length);
   if (missingA.length) fail(400, `Para completar el análisis falta: ${missingA.join('; ')}.`);
   const reference = checkStandardReference(db, r.evaluation);
-  if (r.evaluation.itilType === 'Emergencia' && r.evaluation.classificationJustification.length < 30) fail(400, 'Un cambio de emergencia requiere explicar en al menos 30 caracteres la situación que exige el procedimiento acelerado.');
+  if (r.evaluation.itilType === 'Emergencia' && r.evaluation.classificationJustification.length < 30) fail(400, 'Un cambio de emergencia requiere explicar en al menos 30 caracteres la situación que exige el procedimiento acelerado.', 'classificationJustification');
   r.priority = r.evaluation.priority;
   if (r.status === 'En análisis') {
     r.evaluation.analysisCompletedAt = now();
@@ -329,7 +339,7 @@ function parseConditions(data) {
 }
 function decisionAction(db, r, number, user, data) {
   requireCCC(r, user);
-  const decision = pick(data.decision, C.DECISIONS, 'una decisión');
+  const decision = pick(data.decision, C.DECISIONS, 'una decisión', { field: 'decision' });
   const justification = str(data, 'justification', { required: true, min: 10, max: 5000, label: 'Justificación de la decisión' });
   const base = { n: r.decisions.length + 1, kind: 'Autorización', decision, justification, conditions: [], decidedBy: user.name, decidedById: user.id, at: now(), itilType: r.evaluation?.itilType || '', evaluationSnapshot: r.evaluation ? { ...r.evaluation, potentialIcs: links(db, number).filter(l => l.kind === 'potencial').map(l => `${l.code} (${l.operation})`) } : null };
   if (decision === 'Más información') {
@@ -348,10 +358,8 @@ function decisionAction(db, r, number, user, data) {
   const e = r.evaluation || {}, potentialCount = links(db, number).filter(l => l.kind === 'potencial').length;
   const missing = [...missingAnalysis(e, potentialCount), ...missingPlanning(e)];
   if (missing.length) fail(409, `No se puede aprobar: falta ${missing.join('; ')}.`);
-  if (e.feasibility === 'No viable') {
-    base.feasibilityException = str(data, 'feasibilityException', { required: true, min: 30, max: 3000, label: 'Excepción de viabilidad' });
-    if (!bool(data.analysisReviewed)) fail(400, 'Confirma que revisaste el análisis antes de aprobar un cambio marcado como no viable.');
-  }
+  // Un cambio marcado como no viable no se aprueba: se corrige el análisis o se rechaza.
+  if (e.feasibility === 'No viable') fail(409, 'No se puede aprobar un cambio con viabilidad técnica «No viable». Corrige el análisis (sección B) o rechaza la solicitud.', 'decision');
   if (decision === 'Aprobado con condiciones') {
     base.conditions = parseConditions(data);
     if (!base.conditions.length) fail(400, 'Una aprobación condicionada requiere al menos una condición con su forma de verificación.');
@@ -383,7 +391,7 @@ function assignAction(db, r, number, user, data) {
   const previous = currentAssignment(r);
   if (previous?.developerId === dev.id) fail(409, `${dev.name} ya es el responsable asignado.`);
   const reason = previous ? str(data, 'reason', { required: true, min: 10, max: 2000, label: 'Motivo de la reasignación' }) : str(data, 'reason', { max: 2000 });
-  const assignment = { n: r.assignments.length + 1, developerId: dev.id, developerName: dev.name, assignedBy: user.name, assignedById: user.id, at: now(), targetDate: isoDate(str(data, 'targetDate', { max: 10 }), 'Fecha objetivo', localDate()), notes: str(data, 'notes', { max: 3000, label: 'Observaciones de implementación' }), priority: pick(data.priority || r.priority || 'Media', C.LEVELS, 'una prioridad'), decisionN: auth.n, reason, previous: previous ? previous.developerName : null };
+  const assignment = { n: r.assignments.length + 1, developerId: dev.id, developerName: dev.name, assignedBy: user.name, assignedById: user.id, at: now(), targetDate: isoDate(str(data, 'targetDate', { max: 10 }), 'Fecha objetivo', localDate()), notes: str(data, 'notes', { max: 3000, label: 'Observaciones de implementación' }), priority: pick(data.priority || r.priority || 'Media', C.LEVELS, 'una prioridad', { field: 'priority' }), decisionN: auth.n, reason, previous: previous ? previous.developerName : null };
   if (previous) Object.assign(previous, { releasedAt: assignment.at, releasedReason: reason });
   if (assignment.priority !== r.priority) { audit(db, { entityType: 'CRF', entityId: r.id, action: 'Cambio de prioridad', actor: user, field: 'priority', oldValue: r.priority, newValue: assignment.priority }); r.priority = assignment.priority; }
   r.assignments.push(assignment);
@@ -405,14 +413,14 @@ function activityAction(db, r, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación']);
   const round = currentRound(r);
-  const activity = { id: `ACT-${r.implementation.rounds.reduce((n, x) => n + x.activities.length, 0) + 1}`, date: isoDate(str(data, 'date', { max: 10 }), 'Fecha de la actividad') || localDate(), description: str(data, 'description', { required: true, min: 5, max: 3000, label: 'Descripción de la actividad' }), hours: num(data, 'hours', { required: true, label: 'Tiempo utilizado (horas)', max: 1000 }), status: pick(data.status || 'Completada', C.ACTIVITY_STATES, 'un estado de actividad'), observations: str(data, 'observations', { max: 2000 }), evidence: str(data, 'evidence', { max: 1000 }), by: user.name, at: now() };
+  const activity = { id: `ACT-${r.implementation.rounds.reduce((n, x) => n + x.activities.length, 0) + 1}`, date: isoDate(str(data, 'date', { max: 10 }), 'Fecha de la actividad') || localDate(), description: str(data, 'description', { required: true, min: 5, max: 3000, label: 'Descripción de la actividad' }), hours: num(data, 'hours', { required: true, label: 'Tiempo utilizado (horas)', max: 1000 }), status: pick(data.status || 'Completada', C.ACTIVITY_STATES, 'un estado de actividad', { field: 'status' }), observations: str(data, 'observations', { max: 2000 }), evidence: str(data, 'evidence', { max: 1000 }), by: user.name, at: now() };
   round.activities.push(activity);
   log(db, r, user, 'Registro de actividad', `${activity.id}: ${activity.description} (${activity.hours} h, ${activity.status}).`);
 }
 function gitAction(db, r, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación', 'En pruebas', 'En revisión', 'Correcciones requeridas']);
-  const kind = pick(data.kind, C.GIT_KINDS, 'un tipo de referencia');
+  const kind = pick(data.kind, C.GIT_KINDS, 'un tipo de referencia', { field: 'kind' });
   const value = str(data, 'value', { required: true, max: 300, label: 'Referencia' });
   const url = link(str(data, 'url', { max: 500, label: 'Enlace' }), 'Enlace');
   if (kind === 'Commit' && !/^[0-9a-f]{7,40}$/i.test(value)) fail(400, 'Commit: indica el identificador SHA (7 a 40 caracteres hexadecimales).');
@@ -426,7 +434,7 @@ function icsChangeAction(db, r, number, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación']);
   const ics = validIcs(db, [data.icsId], 'ICS modificado')[0];
-  const operation = pick(data.operation, C.OPERATIONS, 'un tipo de operación');
+  const operation = pick(data.operation, C.OPERATIONS, 'un tipo de operación', { field: 'operation' });
   const toRevision = str(data, 'toRevision', { required: true, max: 60, label: 'Revisión nueva' });
   const description = str(data, 'description', { required: true, min: 5, max: 3000, label: 'Descripción de la modificación' });
   const evidence = str(data, 'evidence', { max: 1000, label: 'Evidencia asociada' });
@@ -455,7 +463,7 @@ function scopeAction(db, r, number, user, data) {
   requireState(r, ['En implementación', 'En pruebas', 'En revisión', 'Correcciones requeridas']);
   const d = r.deviations.find(x => x.id === data.deviationId);
   if (!d || d.status !== 'Pendiente') fail(409, 'La desviación no existe o ya fue decidida.');
-  const decision = pick(data.decision, ['Autorizada', 'No autorizada'], 'una decisión de alcance');
+  const decision = pick(data.decision, ['Autorizada', 'No autorizada'], 'una decisión de alcance', { field: 'decision' });
   const justification = str(data, 'justification', { required: true, min: 10, max: 3000, label: 'Justificación' });
   Object.assign(d, { status: decision, decidedBy: user.name, decidedAt: now(), justification });
   const record = { n: r.decisions.length + 1, kind: 'Ampliación de alcance', decision: decision === 'Autorizada' ? 'Aprobado' : 'Rechazado', justification, deviationId: d.id, conditions: [], decidedBy: user.name, decidedById: user.id, at: now() };
@@ -479,7 +487,7 @@ function sendToTests(db, r, number, user, data) {
 function testAction(db, r, user, data) {
   if (!isDev(user)) fail(403, 'Las pruebas las registran los desarrolladores.');
   requireState(r, ['En pruebas']);
-  const status = pick(data.status, C.TEST_STATES, 'un estado de prueba');
+  const status = pick(data.status, C.TEST_STATES, 'un estado de prueba', { field: 'status' });
   const t = { id: `PRB-${r.tests.length + 1}`, round: currentRound(r).n, name: str(data, 'name', { required: true, max: 200, label: 'Nombre de la prueba' }), description: str(data, 'description', { max: 2000 }), criterion: str(data, 'criterion', { max: 2000 }), expected: str(data, 'expected', { required: true, max: 2000, label: 'Resultado esperado' }), obtained: str(data, 'obtained', { required: ['Superada', 'Fallida', 'Bloqueada'].includes(status), max: 2000, label: 'Resultado obtenido' }), status, date: now(), responsible: user.name, responsibleId: user.id, independent: currentAssignment(r)?.developerId !== user.id, evidence: str(data, 'evidence', { max: 1000 }), observations: str(data, 'observations', { max: 2000 }) };
   r.tests.push(t);
   log(db, r, user, 'Resultado de prueba', `${t.id} ${t.name}: ${t.status}${t.independent ? '' : ' (registrada por el implementador)'}.`);
@@ -494,7 +502,7 @@ function finishTests(db, r, user, data) {
   if (!isDev(user)) fail(403, 'Las pruebas las registran los desarrolladores.');
   requireState(r, ['En pruebas']);
   const round = currentRound(r).n, latest = latestTests(r, round);
-  const outcome = pick(data.outcome, C.TEST_OUTCOMES, 'un resultado de pruebas');
+  const outcome = pick(data.outcome, C.TEST_OUTCOMES, 'un resultado de pruebas', { field: 'outcome' });
   const note = str(data, 'note', { max: 3000, label: 'Observaciones' });
   if (!latest.length) fail(409, 'Registra al menos una prueba en esta ronda.');
   const record = { round, outcome, note, by: user.name, at: now() };
@@ -517,7 +525,7 @@ function finishTests(db, r, user, data) {
 function backoutAction(db, r, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación', 'En pruebas', 'Correcciones requeridas', 'En revisión']);
-  const b = { id: nextId(r.backouts, 'BKO'), round: currentRound(r)?.n || null, trigger: str(data, 'trigger', { required: true, min: 10, max: 2000, label: 'Motivo de activación' }), at: now(), by: user.name, actions: str(data, 'actions', { required: true, min: 10, max: 3000, label: 'Acciones realizadas' }), recovered: str(data, 'recovered', { required: true, max: 300, label: 'Configuración o versión recuperada' }), result: pick(data.result, C.BACKOUT_RESULTS, 'un resultado de reversión'), evidence: str(data, 'evidence', { max: 1000 }), systemState: str(data, 'systemState', { required: true, max: 2000, label: 'Estado posterior del sistema' }) };
+  const b = { id: nextId(r.backouts, 'BKO'), round: currentRound(r)?.n || null, trigger: str(data, 'trigger', { required: true, min: 10, max: 2000, label: 'Motivo de activación' }), at: now(), by: user.name, actions: str(data, 'actions', { required: true, min: 10, max: 3000, label: 'Acciones realizadas' }), recovered: str(data, 'recovered', { required: true, max: 300, label: 'Configuración o versión recuperada' }), result: pick(data.result, C.BACKOUT_RESULTS, 'un resultado de reversión', { field: 'result' }), evidence: str(data, 'evidence', { max: 1000 }), systemState: str(data, 'systemState', { required: true, max: 2000, label: 'Estado posterior del sistema' }) };
   r.backouts.push(b);
   log(db, r, user, 'Ejecución de backout', `${b.id}: ${b.result}. Recuperado: ${b.recovered}. El sistema solo documenta la reversión; no restaura código ni datos.`);
 }
@@ -531,9 +539,9 @@ function reviewAction(db, r, number, user, data) {
   const criteriaResult = criteria.map((text, i) => ({ text, met: bool(rawCriteria[i]?.met), note: str(rawCriteria[i] || {}, 'note', { max: 1000 }) }));
   const rawConditions = Array.isArray(data.conditions) ? data.conditions : [];
   const conditions = (auth?.conditions || []).map(c => { const x = rawConditions.find(y => y?.id === c.id) || {}; return { id: c.id, text: c.text, verification: c.verification, met: bool(x.met), evidence: str(x, 'evidence', { max: 1000 }) }; });
-  const decision = pick(data.decision, C.REVIEW_DECISIONS, 'una decisión de revisión');
+  const decision = pick(data.decision, C.REVIEW_DECISIONS, 'una decisión de revisión', { field: 'decision' });
   const lastTests = r.testRounds.at(-1);
-  const review = { n: r.reviews.length + 1, round: currentRound(r).n, reviewer: user.name, reviewerId: user.id, independent: currentAssignment(r)?.developerId !== user.id, at: now(), summary: str(data, 'summary', { required: true, min: 10, max: 3000, label: 'Resumen de implementación' }), testResult: lastTests?.outcome || 'Sin pruebas', criteria: criteriaResult, rolloutCompliance: pick(data.rolloutCompliance, C.ROLLOUT_COMPLIANCE, 'el cumplimiento del rollout'), conditions, modifiedIcs: links(db, number).filter(l => l.kind === 'modificado').map(l => `${l.code} ${l.fromRevision}→${l.toRevision}${l.inScope ? '' : ' (fuera de alcance)'}`), deviationsFound: str(data, 'deviationsFound', { max: 3000 }), pendingIssues: str(data, 'pendingIssues', { max: 3000 }), recommendation: str(data, 'recommendation', { required: true, max: 3000, label: 'Recomendación final' }), evidence: str(data, 'evidence', { max: 1000 }), decision };
+  const review = { n: r.reviews.length + 1, round: currentRound(r).n, reviewer: user.name, reviewerId: user.id, independent: currentAssignment(r)?.developerId !== user.id, at: now(), summary: str(data, 'summary', { required: true, min: 10, max: 3000, label: 'Resumen de implementación' }), testResult: lastTests?.outcome || 'Sin pruebas', criteria: criteriaResult, rolloutCompliance: pick(data.rolloutCompliance, C.ROLLOUT_COMPLIANCE, 'el cumplimiento del rollout', { field: 'rolloutCompliance' }), conditions, modifiedIcs: links(db, number).filter(l => l.kind === 'modificado').map(l => `${l.code} ${l.fromRevision}→${l.toRevision}${l.inScope ? '' : ' (fuera de alcance)'}`), deviationsFound: str(data, 'deviationsFound', { max: 3000 }), pendingIssues: str(data, 'pendingIssues', { max: 3000 }), recommendation: str(data, 'recommendation', { required: true, max: 3000, label: 'Recomendación final' }), evidence: str(data, 'evidence', { max: 1000 }), decision };
   if (decision === 'Conforme') {
     const problems = [];
     if (lastTests?.outcome !== 'Todas superadas' || lastTests.round !== review.round) problems.push('las pruebas de la ronda actual no están todas superadas');
@@ -565,14 +573,14 @@ function closeAction(db, r, number, user, data) {
   requireState(r, ['En revisión']);
   const round = currentRound(r).n, review = r.reviews.at(-1);
   if (!review || review.round !== round) fail(409, 'Registra la revisión postimplementación de esta ronda antes de cerrar.');
-  const result = pick(data.result, C.CLOSURE_RESULTS, 'un resultado de cierre');
+  const result = pick(data.result, C.CLOSURE_RESULTS, 'un resultado de cierre', { field: 'result' });
   const justification = str(data, 'justification', { required: result !== 'Exitoso', min: result !== 'Exitoso' ? 10 : 0, max: 3000, label: 'Justificación del cierre' });
   if (result === 'Exitoso') {
     if (review.decision !== 'Conforme') fail(409, 'El cierre exitoso requiere una revisión «Conforme».');
     if (r.backouts.some(b => b.round === round)) fail(409, 'Se ejecutó un backout en esta ronda; el cierre no puede ser exitoso.');
   }
   const resultingVersion = str(data, 'resultingVersion', { max: 40, label: 'Versión resultante' });
-  if (resultingVersion && !C.SEMVER.test(resultingVersion)) fail(400, 'Versión resultante: usa MAJOR.MINOR.PATCH.');
+  version(resultingVersion, 'Versión resultante', 'resultingVersion', { greaterThan: r.currentVersion });
   const modified = links(db, number).filter(l => l.kind === 'modificado');
   r.closure = { result, administrative: 'Cerrada', by: user.name, byId: user.id, at: now(), summary: str(data, 'summary', { required: true, min: 10, max: 3000, label: 'Resumen del trabajo' }), modifications: modified.map(l => `${l.code} ${l.operation}: ${l.description}`), evidence: str(data, 'evidence', { max: 1000 }), testsResult: r.testRounds.at(-1)?.outcome || 'Sin pruebas', reviewResult: review.decision, gitRefs: r.gitRefs.map(g => `${g.kind}: ${g.value}`), icsModified: modified.map(l => `${l.code} ${l.fromRevision}→${l.toRevision}`), resultingVersion, justification };
   finalizeRevisions(db, number, result === 'Exitoso');
@@ -603,6 +611,7 @@ function mutate(db, id, action, user, data) {
   if (data.revision !== r.revision) fail(409, 'La solicitud cambió. Actualiza el expediente antes de guardar.');
   switch (action) {
     case 'edit': case 'delete': {
+      if (action === 'edit' && isCCC(user)) { cccCorrection(db, r, number, user, data); break; }
       if (r.ownerId !== user.id) fail(403, 'Solo el solicitante puede modificar esta petición.');
       if (r.status !== 'Registrada' || r.history.some(h => h.action && !['Creación de CRF', 'Petición actualizada', 'Migración'].includes(h.action))) fail(409, 'La petición está bloqueada porque el CCC ya la recibió. Su contenido original se conserva.');
       if (action === 'delete') {
@@ -668,6 +677,31 @@ function mutate(db, id, action, user, data) {
   }
   return present(db, number, save(db, r));
 }
+// El CCC puede corregir cualquier CRF abierto. Los datos originales se conservan en `original`
+// y cada corrección queda registrada con su motivo y los campos modificados (RN-22, RN-35).
+const CRF_KEYS = ['project', 'module', 'title', 'currentBehavior', 'featureMissing', 'description', 'justification', 'result', 'desiredDate', 'observations', 'modificationType', 'environment', 'currentVersion', 'targetVersion', 'spec', 'specUrl', 'businessRulesAffected', 'businessRules', 'acceptanceCriteria', 'suggestedIcsText', 'proposedPriority'];
+function cccCorrection(db, r, number, user, data) {
+  requireCCC(r, user);
+  if (r.status === 'Cerrada') fail(409, 'La solicitud está cerrada; reábrela para corregirla.');
+  const reason = str(data, 'correctionReason', { required: true, min: 10, max: 2000, label: 'Motivo de la corrección' });
+  const { fields, suggested } = requestFields(db, data, r.requesterType, r.date);
+  const before = links(db, number).filter(l => l.kind === 'sugerido').map(l => l.code).sort();
+  const after = suggested.map(i => i.code).sort();
+  const changed = Object.keys(fields).filter(k => JSON.stringify(r[k] ?? null) !== JSON.stringify(fields[k] ?? null));
+  if (JSON.stringify(before) !== JSON.stringify(after)) changed.push('suggestedIcs');
+  if (!changed.length) fail(400, 'No hay cambios que guardar.');
+  r.original ||= { ...Object.fromEntries(CRF_KEYS.filter(k => k in r).map(k => [k, r[k]])), suggestedIcs: before, savedAt: now() };
+  auditChanges(db, { entityType: 'CRF', entityId: r.id, action: 'Corrección del CCC', actor: user, from: r.status, to: r.status, justification: reason }, r, fields, Object.keys(fields));
+  Object.assign(r, fields);
+  if (changed.includes('suggestedIcs')) {
+    db.prepare("DELETE FROM request_ics WHERE request_id=? AND kind='sugerido'").run(number);
+    for (const ics of suggested) insertLink(db, number, ics.id, 'sugerido', user);
+    audit(db, { entityType: 'CRF', entityId: r.id, action: 'Corrección del CCC', actor: user, field: 'ICS sugeridos', oldValue: before.join(', ') || '—', newValue: after.join(', ') || '—', justification: reason });
+  }
+  (r.corrections ||= []).push({ by: user.name, byId: user.id, at: now(), reason, fields: changed });
+  notify(r, `El CCC corrigió datos de tu solicitud: ${reason}`);
+  log(db, r, user, 'Corrección del CCC', `Campos: ${changed.join(', ')}. Motivo: ${reason}`);
+}
 function clarify(db, r, number, user, data) {
   requireState(r, ['Pendiente de información']);
   const note = str(data, 'note', { required: true, min: 5, max: 5000, label: 'Respuesta' });
@@ -678,7 +712,7 @@ function clarify(db, r, number, user, data) {
 }
 function uploadAttachments(db, id, user, data) {
   const { r, number } = getRequest(db, id, user);
-  const context = pick(data.context || 'Evidencia', ['Solicitud', 'Información adicional', 'Evidencia'], 'un contexto de adjunto');
+  const context = pick(data.context || 'Evidencia', ['Solicitud', 'Información adicional', 'Evidencia'], 'un contexto de adjunto', { field: 'context' });
   if (r.status === 'Cerrada') fail(409, 'La solicitud está cerrada; sus evidencias ya no pueden ampliarse.');
   if (!isCCC(user) && r.ownerId !== user.id && !isDev(user)) fail(403, 'No puedes adjuntar archivos a esta solicitud.');
   const saved = files.storeFiles(db, { requestNumber: number, requestCode: r.id, context, files: data.files, user, fail });

@@ -28,7 +28,7 @@ Sistema de control de cambios de **BusesUTA**. Es una simulación académica de 
    - **C.** Rollout ordenado, backout (o estrategia alternativa), plan de pruebas, inactividad, fecha y versión objetivo.
 
    La ficha admite **guardar borrador** sin marcarla como completada. «Completar análisis» exige A y B. «Completar planificación» exige C y deja la solicitud en `Pendiente de aprobación`. Si la ficha se modifica después, vuelve a planificación.
-4. **Aprobación (sección D).** Aprobar, aprobar con condiciones (cada condición con su forma de verificación), rechazar o pedir más información. Aprobar requiere un análisis y una planificación completos. Un cambio **no viable** solo se aprueba con una excepción explícita y la confirmación de que se revisó el análisis. Las decisiones no se sobrescriben: una reevaluación marca la anterior como *sustituida* y registra una nueva.
+4. **Aprobación (sección D).** Aprobar, aprobar con condiciones (cada condición con su forma de verificación), rechazar o pedir más información. Aprobar requiere un análisis y una planificación completos. Un cambio marcado como **no viable no puede aprobarse**: el sistema informa el error y solo permite rechazarlo o corregir el análisis. Las decisiones no se sobrescriben: una reevaluación marca la anterior como *sustituida* y registra una nueva.
 5. **Asignación (sección E).** Solo con una autorización vigente. El CCC asigna a un desarrollador activo; las reasignaciones exigen motivo y conservan a los responsables anteriores.
 6. **Implementación.** El desarrollador asignado consulta el plan aprobado, confirma las condiciones y registra actividades, referencias Git e **ICS realmente modificados**. Cada modificación crea una revisión nueva del ICS en estado *En cambio*, y la anterior se conserva. Modificar un ICS no autorizado genera una **desviación de alcance** que bloquea el avance hasta que el CCC la autorice o la rechace.
 7. **Pruebas.** Cualquier desarrollador registra ejecuciones; se recomienda que no sea el implementador, y el sistema lo marca. Las ejecuciones no se sobrescriben: repetir una prueba crea otra ejecución. «Existen fallos» exige una incidencia y devuelve la solicitud a `Correcciones requeridas`, que abre una nueva ronda de implementación.
@@ -80,6 +80,7 @@ stateDiagram-v2
 | Crear CRF de usuario final (con o sin cuenta) | ✔ | — | — |
 | Crear CRF técnico | — | ✔ | — (no podría evaluarse de forma independiente) |
 | Editar / eliminar el propio CRF | Solo en `Registrada` | Solo en `Registrada` | — |
+| Corregir cualquier CRF (usuario final o técnico) | — | — | ✔ mientras no esté cerrado, con motivo; el original se conserva |
 | Responder solicitudes de información | El propio (o con la clave de seguimiento) | El propio | — |
 | Consultar solicitudes | Propias | Propias, sin cuenta, asignadas y las aprobadas alguna vez | Todas |
 | Recibir, validar y completar la ficha del CCC | — | — | ✔ (salvo su propia solicitud) |
@@ -106,7 +107,8 @@ No existe un rol de administrador: la gestión de cuentas se hace con `npm run a
 | Grupo | Campos principales |
 |---|---|
 | Identificación | `id` (`CRF-000001`), `legacyCode`, `date`, `createdAt`, `name`, `email`, `ownerId`, `submittedWithoutAccount`, `trackingHash`, `requesterType` |
-| Solicitud original (inmutable tras la recepción) | `project`, `module`, `title`, `currentBehavior`, `featureMissing`, `description`, `justification`, `result`, `desiredDate`, `observations` |
+| Correcciones del CCC | `original` (datos del solicitante antes de la primera corrección), `corrections[]{by, at, reason, fields[]}` |
+| Solicitud original (el solicitante ya no la modifica tras la recepción) | `project`, `module`, `title`, `currentBehavior`, `featureMissing`, `description`, `justification`, `result`, `desiredDate`, `observations` |
 | Propuesta técnica | `modificationType`, `environment`, `currentVersion`, `targetVersion`, `spec`, `specUrl`, `businessRulesAffected`, `businessRules`, `acceptanceCriteria[]`, `suggestedIcsText`, `proposedPriority` |
 | Estado | `status`, `priority` (oficial, del CCC), `revision` (control optimista) |
 | Validación | `validation{receivedBy, receivedAt, validatedBy, validatedAt}`, `infoRequests[]{missing, response, …}` |
@@ -143,6 +145,9 @@ No existe un rol de administrador: la gestión de cuentas se hace con `npm run a
 - **Adjuntos en base64 dentro de JSON.** Se eligió así para no añadir un analizador multipart. Límites: 5 archivos de 2 MB por envío y extensiones permitidas.
 - **GitHub.** Solo se registran enlaces y referencias, marcados como «no verificado». No hay integración con la API.
 - **Backout.** Se documenta; el sistema no restaura código ni datos.
+- **Corrección de CRF por el CCC.** El CCC puede editar todos los campos de cualquier CRF abierto. La primera corrección guarda los datos originales en `original`, cada campo modificado se audita con su valor anterior y nuevo, y el solicitante recibe un aviso. La identidad del iniciador no cambia.
+- **Versiones.** Se aceptan versiones semánticas `MAJOR.MINOR.PATCH`, sin ceros a la izquierda. La versión propuesta, la objetivo y la resultante deben ser mayores que la versión actual del CRF (por ejemplo, 1.10.0 es mayor que 1.2.0).
+- **Errores por campo.** El servidor indica el campo con error y la interfaz lo dibuja en rojo, igual que en la validación del navegador.
 - **Un único miembro del CCC.** No puede presentar solicitudes, porque nadie podría evaluarlas de forma independiente. Esto evita el bloqueo detectado en la revisión anterior.
 - **Concurrencia.** Cada expediente tiene `revision`. Una escritura sobre una versión antigua recibe 409 y la interfaz recarga los datos.
 
