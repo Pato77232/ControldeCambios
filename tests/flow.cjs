@@ -52,7 +52,7 @@ function dom() {
         assert.doesNotMatch(nav(), /Catálogo de ICS|Líneas base/); assert.match(nav(), /Auditoría/); assert.doesNotMatch(nav(), /Nueva solicitud/);
         assert.match(await show('#nueva'), /no puede presentarlas/);
         const d4 = await show('#detalle/CRF-000004');
-        assert.match(d4, /Recibir solicitud/); assert.match(d4, /Solicitud original/); assert.match(d4, /case-nav/); assert.match(d4, /Corregir CRF/);
+        assert.match(d4, /Recibir solicitud/); assert.match(d4, /Solicitud original/); assert.match(d4, /case-nav/); assert.match(d4, /Corregir solicitud/);
         const fix = await show('#editar/CRF-000004');
         assert.match(fix, /Motivo de la corrección/); assert.match(fix, /data-group="modules"/); assert.match(fix, /value="Notificaciones" checked/);
         const d1 = await show('#detalle/CRF-000001');
