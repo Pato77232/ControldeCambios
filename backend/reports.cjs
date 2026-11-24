@@ -12,7 +12,7 @@ function rowsFor(db, user, filters = {}) {
     const rounds = r.implementation?.rounds || [];
     return {
       id: r.id, title: r.title, date: r.date, createdAt: r.createdAt, status: r.status, module: r.module, priority: r.priority || 'Sin definir',
-      itilType: r.evaluation?.itilType || 'Sin clasificar', requester: r.name, requesterType: r.requesterType === 'experto' ? 'Desarrollador' : 'Usuario final',
+      itilType: r.evaluation?.itilType || 'Sin clasificar', requester: r.name, participants: [...new Set([r.ownerId, ...(r.assignments || []).map(x => x.developerId), ...(r.history || []).map(h => h.responsibleId)].filter(Boolean))], requesterType: r.requesterType === 'experto' ? 'Desarrollador' : 'Usuario final',
       developer: assignee?.developerName || 'Sin asignar', developerId: assignee?.developerId || '', decision: auth?.decision || 'Sin decisión',
       result: r.closure?.result || (r.closure ? r.closure.administrative : 'Sin cierre'), modules: modulesOf(r), issue: r.github?.issue ? `#${r.github.issue.number}` : '',
       decisionDays: finalDecision ? (Date.parse(finalDecision.at) - Date.parse(r.createdAt)) / DAY : null,
@@ -21,7 +21,7 @@ function rowsFor(db, user, filters = {}) {
       everDecided: !!finalDecision, everApproved: (r.decisions || []).some(d => d.kind === 'Autorización' && d.decision.startsWith('Aprobado')), rejected: auth?.decision === 'Rechazado'
     };
   }).filter(x => (!filters.from || x.date >= filters.from) && (!filters.to || x.date <= filters.to) && (!filters.status || x.status === filters.status) && (!filters.itilType || x.itilType === filters.itilType)
-    && (!filters.requester || x.requester.toLowerCase().includes(String(filters.requester).toLowerCase())) && (!filters.developer || x.developerId === filters.developer)
+    && (!filters.requester || x.requester.toLowerCase().includes(String(filters.requester).toLowerCase())) && (!filters.developer || x.developerId === filters.developer) && (!filters.user || x.participants.includes(filters.user))
     && (!filters.module || x.modules.includes(filters.module)) && (!filters.priority || x.priority === filters.priority) && (!filters.result || x.result === filters.result));
 }
 const group = (rows, key) => Object.entries(rows.reduce((acc, r) => { for (const k of [].concat(r[key])) acc[k] = (acc[k] || 0) + 1; return acc; }, {})).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);

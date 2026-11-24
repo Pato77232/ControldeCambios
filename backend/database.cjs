@@ -22,6 +22,10 @@ function openDatabase(filename) {
     });
   }
   if (!db.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'active')) db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+  // Usuario de GitHub de cada integrante (para asignar issues). Se completa desde team.cjs sin tocar otros datos.
+  if (!db.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'github')) db.exec('ALTER TABLE users ADD COLUMN github TEXT');
+  const { TEAM } = require('./team.cjs');
+  for (const [, , email, , github] of TEAM) if (github) db.prepare('UPDATE users SET github=? WHERE email=? AND github IS NULL').run(github, email);
   // Versión 4: adjuntos reales y auditoría persistente. Las tablas de ICS y líneas base ya no se usan
   // (la gestión se hace por módulos), pero se conservan para no perder datos registrados anteriormente.
   db.exec(`

@@ -2,8 +2,11 @@
 
 Con esta integración, el Sistema de Control de Cambios trabaja con el repositorio de **BusesUTA** de forma parecida a Jira:
 
-- **Cada solicitud de cambio (CRF) crea una issue** en GitHub, con el código `[CRF-000001]`, los módulos afectados, la descripción y los criterios de aceptación como lista de tareas.
-- **La issue sigue el flujo del CRF.** En cada hito (recepción, aprobación o rechazo, asignación, inicio de implementación, pruebas, revisión, cierre) la issue recibe un comentario y cambia su etiqueta `estado: …`. Al cerrar el CRF, la issue se cierra: como *completada* si el resultado fue exitoso y como *no planificada* en los demás casos (por ejemplo, un rechazo).
+- **Cuando el CCC aprueba una solicitud de cambio (CRF) se crea su issue** en GitHub, con el código `[CRF-000001]`, los módulos afectados, la descripción y los criterios de aceptación como lista de tareas. Las solicitudes rechazadas o en evaluación no generan issues.
+- **La issue se asigna sola** al desarrollador que el CCC elige, usando su usuario de GitHub, y cambia si hay una reasignación.
+- **Rama de trabajo por cambio.** El desarrollador la crea desde el sistema con el formato `identificador-titulo-descripcionCorta` (por ejemplo `CRF-000001-cancelar-boletos-liberar-asiento`), a partir de la rama base acordada.
+- **Pull request al terminar.** El sistema crea el PR de la rama de trabajo hacia la base, o verifica uno existente y comprueba de qué rama a qué rama va.
+- **La issue sigue el flujo del CRF.** En cada hito (asignación, inicio de implementación, rama, PR, pruebas, revisión, cierre) la issue recibe un comentario y cambia su etiqueta `estado: …`. Al cerrar el CRF, la issue se cierra: como *completada* si el resultado fue exitoso y como *no planificada* en los demás casos.
 - **Las referencias de Git se verifican de verdad.** Cuando el desarrollador registra una rama, un commit, un pull request o un tag, el sistema consulta GitHub. Si no existe, no se registra. Si existe, guarda su estado; por ejemplo, un PR «abierto» o «fusionado». El botón **Verificar** vuelve a consultarlo más tarde.
 
 El estado oficial y la autorización siguen viviendo en el Sistema de Control de Cambios. La issue es el ticket de trabajo del equipo.
@@ -19,8 +22,10 @@ Necesitas el nombre en formato `propietario/repositorio`, por ejemplo `uta-softw
 3. **Repository access:** *Only select repositories* → elige solo el repositorio de BusesUTA.
 4. **Permissions → Repository permissions:**
    - **Issues:** *Read and write* (para crear y actualizar las issues).
-   - **Contents:** *Read-only* (para verificar ramas, commits y tags).
-   - **Pull requests:** *Read-only* (para consultar el estado de los PR).
+   - **Contents:** *Read and write* (para crear la rama de trabajo y verificar ramas, commits y tags).
+   - **Pull requests:** *Read and write* (para crear el PR y consultar su estado).
+
+   Si ya creaste el token con permisos de solo lectura, edítalo en GitHub y cambia esos dos permisos: no hace falta generar uno nuevo.
    - **Metadata:** *Read-only* (GitHub lo exige siempre).
 5. Elige una fecha de vencimiento razonable, por ejemplo el final del semestre, y genera el token.
 6. Cópialo en ese momento: GitHub no vuelve a mostrarlo.
@@ -50,17 +55,24 @@ Entra con cualquier cuenta del equipo y abre el expediente de una solicitud. En 
 
 ## Paso 5. Prueba el flujo
 
-1. Crea una solicitud. En su expediente, **Issue de GitHub** muestra el enlace `#N`. En GitHub verás la issue con las etiquetas `control-de-cambios`, `estado: registrada` y una por cada módulo; GitHub las crea automáticamente la primera vez.
-2. Como CCC, recibe la solicitud. La issue recibe un comentario y pasa a `estado: en validación`.
-3. Como desarrollador asignado, registra la rama de trabajo (por ejemplo `feature/CRF-000001-cancelacion`) y luego el PR. Si escribes una rama que no existe, el sistema lo rechaza y marca el campo en rojo.
+1. Crea una solicitud y, como CCC, recíbela, valídala, completa la ficha y apruébala. En ese momento se crea la issue y el expediente muestra el enlace `#N`.
+2. Asigna un desarrollador: la issue queda asignada a su usuario de GitHub.
+3. Como desarrollador asignado, abre **Seguimiento paso a paso** (desde *Mis tareas* o el expediente):
+   1. **Iniciar**: revisa los planes aprobados y empieza la implementación.
+   2. **Rama de trabajo**: escribe una descripción corta y marca «Crear la rama en GitHub». Se crea `CRF-000001-titulo-descripcion-corta` desde la rama base.
+   3. **Desarrollo**: trabaja en esa rama, sube tus commits y registra actividades y módulos modificados.
+   4. **Pull request**: «Crear en GitHub» abre el PR de la rama de trabajo hacia la base, con `Refs #N` a la issue. También puedes registrar uno existente; el sistema verifica que vaya de la rama correcta a la base acordada.
+   5. **Enviar a pruebas**.
 4. Al cerrar el CRF, la issue se cierra sola.
 
-**Recomendación para el equipo:** nombra las ramas y los PR con el código del CRF (`feature/CRF-000001-...`, «CRF-000001: …») y menciona la issue en el PR (`Refs #N`). Así GitHub muestra el vínculo entre el PR y la issue.
+**Usuarios de GitHub del equipo:** están en `backend/team.cjs`. Si alguien cambia de cuenta, actualízala ahí y ejecuta `npm run accounts:sync`. Para que GitHub permita asignarle la issue, esa persona debe ser colaboradora del repositorio.
 
 ## Si algo falla
 
 - **GitHub no responde o rechaza el token:** la solicitud se registra igual. El expediente muestra el motivo y el CCC puede pulsar **Crear issue** o **Sincronizar issue** para reintentarlo.
-- **«El token no tiene permisos suficientes»:** revisa los permisos del paso 2 y que el token incluya ese repositorio.
+- **«El token no tiene permisos suficientes» / «no puede crear ramas o pull requests»:** revisa los permisos del paso 2 (Contents y Pull requests en *Read and write*) y que el token incluya ese repositorio.
+- **«No se pudo asignar a …»:** ese usuario de GitHub no es colaborador del repositorio o está mal escrito en `backend/team.cjs`.
+- **«La rama no tiene commits nuevos»:** GitHub no permite un PR vacío; sube tus cambios a la rama de trabajo antes de crearlo.
 - **«Se alcanzó el límite de consultas»:** sin token, GitHub permite pocas consultas por hora; configura `GITHUB_TOKEN`.
 - **La demostración** (`npm run start:demo`) no se conecta a GitHub para no crear issues de prueba en el repositorio real.
 
@@ -70,5 +82,4 @@ Solo los datos del cambio: código, título, módulos, descripción, justificaci
 
 ## Próximos pasos posibles
 
-- Asignar la issue al desarrollador (requiere registrar el usuario de GitHub de cada integrante).
 - Recibir *webhooks* de GitHub para actualizar automáticamente el estado de los PR. Requiere publicar la aplicación con una URL accesible desde internet.

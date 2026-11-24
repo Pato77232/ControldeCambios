@@ -1329,3 +1329,49 @@ input[aria-invalid=true],select[aria-invalid=true],textarea[aria-invalid=true],.
 .summary-head h2{margin:0}
 .original-hint{display:flex;gap:6px;align-items:flex-start;margin-top:6px;padding:6px 10px;border-radius:8px;background:#fff7e6;color:#7a5512;font-size:11.5px;line-height:1.45}
 .original-hint svg{width:14px;height:14px;flex:0 0 14px;margin-top:1px}
+
+/* ---------- Markdown (planes de rollout y backout) ---------- */
+.markdown{font-size:13.5px;line-height:1.6;color:var(--ink)}
+.markdown h4,.markdown h5,.markdown h6{margin:12px 0 4px;font-size:13.5px;color:var(--navy)}
+.markdown p{margin:4px 0}
+.markdown ul,.markdown ol{margin:4px 0 8px;padding-left:20px}
+.markdown code{background:#eef3f9}
+.md-field .md-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+.md-tabs{display:flex;gap:6px}
+.md-tabs .chip.active{background:#eaf3ff;border-color:#2563eb;color:#1f5fbf}
+.md-input{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.55;min-height:220px}
+.md-preview{border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:#fff;min-height:220px}
+.plan-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:8px 0 12px}
+.plan-grid>div{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fbfcfe}
+.plan-grid h4{margin:0 0 6px;font-size:14px;color:var(--navy)}
+
+/* ---------- Rama de trabajo y PR ---------- */
+.flow-refs{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
+.ref-box{display:flex;gap:10px;align-items:flex-start;border:1px solid #dbe4ee;border-radius:12px;padding:10px 12px;background:#fff;min-width:0;max-width:100%}
+.ref-box>svg{width:20px;height:20px;color:#1f5fbf;flex:0 0 20px;margin-top:2px}
+.ref-box div{display:grid;gap:3px;min-width:0}
+.ref-box small{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#7a8aa1}
+.ref-box code{word-break:break-all}
+.ref-arrow{color:#7a8aa1}
+.branch-preview{display:block;padding:10px 12px;font-size:13px;background:#0f1f33;color:#d7f0ff;border-radius:8px;word-break:break-all}
+
+/* ---------- Seguimiento paso a paso ---------- */
+.stepper{display:flex;list-style:none;padding:0;margin:0 0 16px;gap:6px;overflow-x:auto}
+.stepper li{flex:1 1 0;min-width:120px}
+.stepper button{width:100%;display:flex;gap:8px;align-items:center;border:1.5px solid var(--line);background:#fff;border-radius:12px;padding:10px 12px;font:inherit;font-size:13px;color:#4f6584;text-align:left}
+.stepper .step-dot{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:#e6ecf3;font-weight:700;flex:0 0 26px}
+.stepper .step-dot svg{width:14px;height:14px}
+.stepper li.done button{border-color:#bfe3d3}
+.stepper li.done .step-dot{background:#22a06b;color:#fff}
+.stepper li.shown button{border-color:#2563eb;background:#f2f7ff;color:#0b4fb3;font-weight:650;box-shadow:0 0 0 3px #dbe9ff}
+.stepper li.shown:not(.done) .step-dot{background:#2563eb;color:#fff}
+.stepper li.locked button{opacity:.5;cursor:not-allowed}
+.step-form{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fbfcfe;margin-top:12px}
+.step-form .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.step-form .field.full{grid-column:1/-1}
+.step-nav{display:flex;justify-content:space-between;gap:10px;margin:12px 0}
+.checklist{list-style:none;padding:0;margin:0 0 12px;display:grid;gap:6px}
+.checklist li{display:flex;gap:8px;align-items:center;color:#a32842}
+.checklist li.ok{color:#1d6f54}
+.checklist svg{width:16px;height:16px}
+@media(max-width:750px){.stepper li{min-width:150px}}

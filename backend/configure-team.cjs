@@ -8,10 +8,10 @@ const EVALUATING = ['En análisis', 'En planificación', 'Pendiente de aprobaci�
 function configureTeam(db, password) {
   if (typeof password !== 'string' || password.length < 12) throw Error('SEED_PASSWORD debe contener al menos 12 caracteres.');
   // Hashes calculados antes de abrir la transacción para reducir el bloqueo.
-  const members = TEAM.map(u => [...u, hashPassword(password)]);
+  const members = TEAM.map(([id, name, email, role, github]) => [id, name, email, role, hashPassword(password), github || null]);
   return transaction(db, () => {
     db.prepare('UPDATE users SET active=0').run();
-    const upsert = db.prepare('INSERT INTO users(id,name,email,role,password_hash,active) VALUES(?,?,?,?,?,1) ON CONFLICT(email) DO UPDATE SET name=excluded.name,role=excluded.role,password_hash=excluded.password_hash,active=1');
+    const upsert = db.prepare('INSERT INTO users(id,name,email,role,password_hash,github,active) VALUES(?,?,?,?,?,?,1) ON CONFLICT(email) DO UPDATE SET name=excluded.name,role=excluded.role,password_hash=excluded.password_hash,github=excluded.github,active=1');
     for (const member of members) upsert.run(...member);
     db.prepare('DELETE FROM sessions').run();
     const ccc = new Set(db.prepare("SELECT id FROM users WHERE role='ccc' AND active=1").all().map(u => u.id));

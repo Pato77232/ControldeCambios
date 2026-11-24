@@ -1,8 +1,9 @@
 'use strict';
 // Integración con GitHub (API REST v3).
 // - Verifica que las ramas, commits, pull requests y tags registrados existan en el repositorio de BusesUTA.
-// - Crea una issue por cada CRF (como un ticket) y la mantiene sincronizada: etiquetas de estado,
-//   comentarios en los hitos y cierre de la issue cuando el CRF se cierra.
+// - Crea una issue cuando el CCC aprueba el CRF (como un ticket) y la mantiene sincronizada: etiquetas de
+//   estado, responsable asignado, comentarios en los hitos y cierre de la issue cuando el CRF se cierra.
+// - Crea la rama de trabajo y el pull request del cambio, o verifica los existentes.
 // Configuración (.env): GITHUB_REPO=propietario/repositorio, GITHUB_TOKEN (opcional para repos públicos;
 // obligatorio para crear issues), GITHUB_API_URL (por defecto https://api.github.com).
 // A GitHub solo se envían datos del cambio: nunca correos ni nombres de solicitantes.
@@ -67,7 +68,7 @@ function createGithub({ repo = '', token = '', apiUrl = 'https://api.github.com'
       const number = (/^#?(\d+)$/.exec(value) || /\/pull\/(\d+)/.exec(parsed ? `/${parsed.type}/${parsed.rest.join('/')}` : ''))?.[1];
       if (!number) return { checked: false, ok: false, status: 'error', message: 'No se pudo determinar el número del pull request.', at: at() };
       res = await call(`${repoPath}/pulls/${number}`);
-      if (res.status === 200) details = { number: res.data.number, title: String(res.data.title || '').slice(0, 200), state: res.data.merged_at ? 'fusionado' : res.data.state === 'open' ? (res.data.draft ? 'borrador' : 'abierto') : 'cerrado sin fusionar', merged: !!res.data.merged_at, mergedAt: res.data.merged_at, head: res.data.head?.ref, base: res.data.base?.ref, url: res.data.html_url };
+      if (res.status === 200) details = pullDetails(res.data);
     } else if (kind === 'Versión o tag') {
       res = await call(`${repoPath}/git/ref/tags/${encodeURIComponent(value)}`);
       if (res.status === 200) details = { sha: res.data.object?.sha, url: `https://github.com/${repo}/releases/tag/${encodeURIComponent(value)}` };
@@ -76,6 +77,32 @@ function createGithub({ repo = '', token = '', apiUrl = 'https://api.github.com'
     return { ...failure(res, `${kind} «${value}» no existe en ${repo}.`), at: at() };
   }
 
+  // Crea la rama de trabajo desde la rama base (o confirma que ya existe).
+  async function createBranch(name, base) {
+    if (!configured || !token) return { checked: false, ok: false, status: 'sin configurar', message: 'Para crear ramas configura GITHUB_REPO y GITHUB_TOKEN.', at: at() };
+    const existing = await call(`${repoPath}/branches/${encodeURIComponent(name)}`);
+    if (existing.status === 200) return { checked: true, ok: true, created: false, status: 'verificada', message: `La rama ya existía en ${repo}.`, details: { sha: existing.data.commit?.sha, url: `https://github.com/${repo}/tree/${name}` }, at: at() };
+    const ref = await call(`${repoPath}/git/ref/heads/${base.split('/').map(encodeURIComponent).join('/')}`);
+    if (ref.status !== 200) return { ...failure(ref, `La rama base «${base}» no existe en ${repo}.`), field: 'base', at: at() };
+    const created = await call(`${repoPath}/git/refs`, { method: 'POST', body: { ref: `refs/heads/${name}`, sha: ref.data.object?.sha } });
+    if (created.status === 201) return { checked: true, ok: true, created: true, status: 'verificada', message: `Rama creada en ${repo} desde ${base}.`, details: { sha: ref.data.object?.sha, url: `https://github.com/${repo}/tree/${name}` }, at: at() };
+    const f = failure(created, 'No se pudo crear la rama.');
+    return { ...f, message: created.status === 403 ? 'El token no puede crear ramas: dale el permiso «Contents: Read and write».' : f.message, at: at() };
+  }
+  // Crea el pull request de la rama de trabajo hacia la base (o reutiliza uno abierto con la misma dirección).
+  async function createPull({ head, base, title, body }) {
+    if (!configured || !token) return { checked: false, ok: false, status: 'sin configurar', message: 'Para crear pull requests configura GITHUB_REPO y GITHUB_TOKEN.', at: at() };
+    const owner = repo.split('/')[0];
+    const open = await call(`${repoPath}/pulls?state=open&head=${encodeURIComponent(`${owner}:${head}`)}&base=${encodeURIComponent(base)}`);
+    if (open.status === 200 && Array.isArray(open.data) && open.data.length) return { checked: true, ok: true, created: false, status: 'verificada', message: `Ya existía el PR #${open.data[0].number} de ${head} a ${base}.`, details: pullDetails(open.data[0]), at: at() };
+    const res = await call(`${repoPath}/pulls`, { method: 'POST', body: { title: title.slice(0, 250), head, base, body: body.slice(0, 60000) } });
+    if (res.status === 201) return { checked: true, ok: true, created: true, status: 'verificada', message: `PR #${res.data.number} creado de ${head} a ${base}.`, details: pullDetails(res.data), at: at() };
+    const detail = res.data?.errors?.map(e => e.message).filter(Boolean).join(' ') || '';
+    const message = res.status === 403 ? 'El token no puede crear pull requests: dale el permiso «Pull requests: Read and write».'
+      : /No commits between/i.test(detail) ? `La rama ${head} no tiene commits nuevos respecto de ${base}: sube tus cambios antes de crear el PR.`
+      : detail || failure(res, 'No se pudo crear el pull request.').message;
+    return { checked: true, ok: false, status: 'error', message, at: at() };
+  }
   async function status() {
     if (!configured) return { configured: false, repo: repo || null, canCreateIssues: false, message: 'Define GITHUB_REPO=propietario/repositorio en .env para activar la integración.' };
     if (statusCache && Date.now() - statusCache.time < 60000) return statusCache.value;
@@ -114,7 +141,7 @@ function createGithub({ repo = '', token = '', apiUrl = 'https://api.github.com'
     return { ok: false, message: failure(res, `No se encontró el repositorio ${repo}.`).message };
   }
   // Sincroniza la etiqueta de estado, la abre o cierra y comenta el último hito del historial.
-  async function syncIssue(r, { comment = '' } = {}) {
+  async function syncIssue(r, { comment = '', assignees = null } = {}) {
     const issue = r.github?.issue;
     if (!configured || !token || !issue) return { ok: false, message: 'La solicitud no tiene una issue asociada o falta GITHUB_TOKEN.' };
     const current = await call(`${repoPath}/issues/${issue.number}`);
@@ -122,18 +149,25 @@ function createGithub({ repo = '', token = '', apiUrl = 'https://api.github.com'
     const labels = (current.data.labels || []).map(l => typeof l === 'string' ? l : l.name).filter(l => !l.startsWith(STATUS_LABEL_PREFIX));
     const closed = r.status === 'Cerrada';
     const reason = closed ? (r.closure?.result === 'Exitoso' ? 'completed' : 'not_planned') : undefined;
-    const update = await call(`${repoPath}/issues/${issue.number}`, { method: 'PATCH', body: { labels: [...labels, statusLabel(r.status)], state: closed ? 'closed' : 'open', ...(reason ? { state_reason: reason } : {}) } });
+    const body = { labels: [...labels, statusLabel(r.status)], state: closed ? 'closed' : 'open', ...(reason ? { state_reason: reason } : {}), ...(assignees ? { assignees } : {}) };
+    let update = await call(`${repoPath}/issues/${issue.number}`, { method: 'PATCH', body });
+    let warning = '';
+    // Si GitHub no acepta al responsable (no es colaborador), se actualiza el resto y se informa.
+    if (update.status === 422 && assignees) { delete body.assignees; update = await call(`${repoPath}/issues/${issue.number}`, { method: 'PATCH', body }); warning = ` No se pudo asignar a ${assignees.join(', ')}: debe ser colaborador del repositorio.`; }
     if (update.status !== 200) return { ok: false, message: failure(update, 'No se pudo actualizar la issue.').message };
     if (comment) {
       const c = await call(`${repoPath}/issues/${issue.number}/comments`, { method: 'POST', body: { body: comment.slice(0, 60000) } });
       if (c.status !== 201) return { ok: false, issue: issueRef(update.data), message: failure(c, 'No se pudo comentar la issue.').message };
     }
-    return { ok: true, issue: issueRef(update.data), message: `Issue #${issue.number} sincronizada (${statusLabel(r.status)}).` };
+    return { ok: !warning, issue: issueRef(update.data), message: `Issue #${issue.number} sincronizada (${statusLabel(r.status)}).${warning}` };
   }
-  return { configured, repo, verify, status, createIssue, syncIssue, canIssue: () => configured && !!token };
+  return { configured, repo, verify, status, createIssue, syncIssue, createBranch, createPull, canIssue: () => configured && !!token };
 }
 // Comentario para la issue a partir del último evento del historial (sin datos personales del solicitante).
-const MILESTONES = ['Recepción del CRF', 'Inicio del análisis', 'Solicitud de información adicional', 'Respuesta del iniciador', 'Planificación completada', 'Aprobación', 'Aprobación condicionada', 'Rechazo', 'Reevaluación', 'Asignación', 'Reasignación', 'Inicio de implementación', 'Inicio de correcciones', 'Envío a pruebas', 'Resultado de pruebas', 'Revisión postimplementación', 'Cierre', 'Cierre administrativo', 'Reapertura', 'Decisión de alcance'];
+const MILESTONES = ['Rama de trabajo', 'Pull request', 'Recepción del CRF', 'Inicio del análisis', 'Solicitud de información adicional', 'Respuesta del iniciador', 'Planificación completada', 'Aprobación', 'Aprobación condicionada', 'Rechazo', 'Reevaluación', 'Asignación', 'Reasignación', 'Inicio de implementación', 'Inicio de correcciones', 'Envío a pruebas', 'Resultado de pruebas', 'Revisión postimplementación', 'Cierre', 'Cierre administrativo', 'Reapertura', 'Decisión de alcance'];
+function pullDetails(d) {
+  return { number: d.number, title: String(d.title || '').slice(0, 200), state: d.merged_at ? 'fusionado' : d.state === 'open' ? (d.draft ? 'borrador' : 'abierto') : 'cerrado sin fusionar', merged: !!d.merged_at, mergedAt: d.merged_at, head: d.head?.ref, base: d.base?.ref, url: d.html_url };
+}
 function milestoneComment(r, before) {
   const events = r.history.slice(before).filter(h => MILESTONES.includes(h.action));
   if (!events.length) return '';

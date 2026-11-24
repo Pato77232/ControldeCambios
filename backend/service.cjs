@@ -157,7 +157,8 @@ function requestFields(db, data, kind, date) {
   if (kind === 'experto') {
     f.modificationType = pick(data.modificationType, C.OPERATIONS, 'un tipo de modificación', { field: 'modificationType' });
     f.environment = pick(data.environment, C.ENVIRONMENTS, 'un entorno afectado', { field: 'environment' });
-    f.currentVersion = str(data, 'currentVersion', { required: true, max: 40, label: 'Versión actual' });
+    f.proposedItilType = pick(data.proposedItilType, Object.keys(C.ITIL), 'un tipo de cambio ITIL propuesto', { field: 'proposedItilType' });
+    f.currentVersion = str(data, 'currentVersion', { max: 40, label: 'Versión actual' }) || 'No determinada';
     version(f.currentVersion, 'Versión actual', 'currentVersion', { allow: ['No determinada'] });
     f.targetVersion = str(data, 'targetVersion', { max: 40, label: 'Versión propuesta' });
     version(f.targetVersion, 'Versión propuesta', 'targetVersion', { greaterThan: f.currentVersion });
@@ -204,18 +205,17 @@ const EVAL_TEXT = {
   classificationJustification: 'Justificación de la clasificación', standardReference: 'Procedimiento estándar de referencia', plannedChanges: 'Conjunto de modificaciones previstas',
   technicalImpact: 'Impacto técnico previsto', functionalImpact: 'Impacto funcional u operativo',
   feasibilityJustification: 'Justificación de viabilidad', resources: 'Recursos necesarios', considerations: 'Consideraciones adicionales',
-  rolloutObjective: 'Objetivo de la implementación', rolloutDependencies: 'Dependencias', rolloutResponsibles: 'Responsables previstos', rolloutChecks: 'Verificaciones iniciales', rolloutCompletion: 'Condiciones de implementación completada',
-  backoutTriggers: 'Condiciones que activan la reversión', backoutVersion: 'Versión o configuración a recuperar', backoutData: 'Precauciones sobre los datos', backoutResponsible: 'Responsable de la reversión', backoutVerification: 'Verificación posterior a la reversión', backoutAlternative: 'Estrategia de recuperación o mitigación',
+  rolloutPlan: 'Plan de rollout', backoutPlan: 'Plan de backout',
   testObjective: 'Objetivo de las pruebas', testTypes: 'Tipos de prueba previstos', testSuccess: 'Condiciones de éxito', testEvidence: 'Evidencias esperadas',
   plannedDate: 'Fecha prevista de implementación', targetVersion: 'Versión objetivo'
 };
-const EVAL_LIST = { risks: 'Riesgos identificados', rolloutSteps: 'Actividades del rollout (en orden)', backoutActions: 'Acciones de reversión', testCriteria: 'Criterios de aceptación para pruebas' };
+const EVAL_LIST = { risks: 'Riesgos identificados', testCriteria: 'Criterios de aceptación para pruebas' };
 const EVAL_ENUM = { itilType: [Object.keys(C.ITIL), 'un tipo de cambio ITIL'], impact: [C.IMPACT, 'un impacto'], urgency: [C.LEVELS, 'una urgencia'], priority: [C.LEVELS, 'una prioridad'], feasibility: [C.FEASIBILITY, 'una viabilidad'], downtimeUnit: [C.DOWNTIME_UNITS, 'una unidad de inactividad'] };
 const EVAL_NUM = { effortHours: 'Esfuerzo estimado (horas-persona)', durationDays: 'Duración estimada (días calendario)', downtimeValue: 'Tiempo de inactividad previsto' };
 const EVAL_KEYS = [...Object.keys(EVAL_TEXT), ...Object.keys(EVAL_LIST), ...Object.keys(EVAL_ENUM), ...Object.keys(EVAL_NUM), 'standardSameConditions', 'affectedModules'];
 function parseEvaluation(db, data, r) {
   const e = {};
-  for (const [k, label] of Object.entries(EVAL_TEXT)) e[k] = str(data, k, { max: ['targetVersion', 'plannedDate'].includes(k) ? 40 : 5000, label });
+  for (const [k, label] of Object.entries(EVAL_TEXT)) e[k] = str(data, k, { max: ['targetVersion', 'plannedDate'].includes(k) ? 40 : ['rolloutPlan', 'backoutPlan'].includes(k) ? 20000 : 5000, label });
   for (const [k, label] of Object.entries(EVAL_LIST)) e[k] = list(data, k, { label });
   for (const [k, [values, label]] of Object.entries(EVAL_ENUM)) e[k] = pick(data[k], values, label, { required: false, field: k });
   for (const [k, label] of Object.entries(EVAL_NUM)) e[k] = num(data, k, { label, max: k === 'durationDays' ? 3650 : 100000 });
@@ -243,19 +243,20 @@ function missingAnalysis(e) {
   need(e.durationDays !== null && e.durationDays !== undefined, EVAL_NUM.durationDays);
   return m;
 }
+// Contenido real de un plan en Markdown: sin títulos, viñetas vacías ni la plantilla sin completar.
+const planContent = text => String(text || '').split(/\r?\n/).map(l => l.replace(/^\s*(#{1,6}\s.*|[-*+]\s*|\d+[.)]\s*|>\s*)$/, '').replace(/^\s*(#{1,6}\s+)/, '')).join(' ').replace(/\s+/g, ' ').trim();
 // Emergencia: planes resumidos pero trazables. Normal y estándar: planes completos.
 function missingPlanning(e) {
   const m = [], need = (ok, label) => { if (!ok) m.push(label); };
-  need(e.rolloutSteps?.length, EVAL_LIST.rolloutSteps);
-  need(e.backoutActions?.length || e.backoutAlternative, `${EVAL_LIST.backoutActions} o estrategia de recuperación`);
-  need(e.backoutTriggers, EVAL_TEXT.backoutTriggers);
+  const minimum = e.itilType === 'Emergencia' ? 15 : 40;
+  need(planContent(e.rolloutPlan).length >= minimum, `${EVAL_TEXT.rolloutPlan} (describe objetivo, actividades en orden y verificaciones)`);
+  need(planContent(e.backoutPlan).length >= minimum, `${EVAL_TEXT.backoutPlan} (condiciones de activación, acciones de reversión y verificación)`);
   need(e.testCriteria?.length, EVAL_LIST.testCriteria);
   need(e.downtimeValue !== null && e.downtimeValue !== undefined, EVAL_NUM.downtimeValue);
   need(e.downtimeUnit, 'Unidad del tiempo de inactividad');
   need(e.plannedDate, EVAL_TEXT.plannedDate);
   if (e.itilType !== 'Emergencia') {
-    for (const k of ['rolloutObjective', 'rolloutDependencies', 'rolloutChecks', 'rolloutCompletion', 'backoutResponsible', 'backoutVerification', 'testObjective', 'testTypes', 'testSuccess', 'testEvidence']) need(e[k], EVAL_TEXT[k]);
-    need(e.backoutActions?.length ? e.backoutVersion && e.backoutData : e.backoutAlternative, 'Versión a recuperar y precauciones sobre los datos (o estrategia alternativa justificada)');
+    for (const k of ['testObjective', 'testTypes', 'testSuccess', 'testEvidence']) need(e[k], EVAL_TEXT[k]);
   }
   return m;
 }
@@ -312,7 +313,7 @@ function evaluationAction(db, r, number, user, data) {
     const missingP = missingPlanning(r.evaluation);
     if (missingP.length) fail(400, `Para completar la planificación falta: ${missingP.join('; ')}.`);
     r.evaluation.planningCompletedAt = now();
-    transition(db, r, user, 'Pendiente de aprobación', 'Planificación completada', `Rollout (${r.evaluation.rolloutSteps.length} actividades), backout y plan de pruebas documentados.`);
+    transition(db, r, user, 'Pendiente de aprobación', 'Planificación completada', 'Planes de rollout, backout y pruebas documentados.');
   }
 }
 function parseConditions(data) {
@@ -431,7 +432,45 @@ function gitRefreshAction(db, r, user, data) {
   if (!v) fail(409, 'No se pudo consultar GitHub.');
   const before = ref.verification?.details?.state || (ref.verified ? 'verificada' : 'sin verificar');
   Object.assign(ref, { verified: v.ok === true, verification: v });
+  if (ref.kind === 'Pull request' && r.pullRequest && `#${r.pullRequest.number}` === ref.value && v.details) Object.assign(r.pullRequest, { state: v.details.state || r.pullRequest.state, verified: v.ok === true, verification: v });
   log(db, r, user, 'Verificación de referencia', `${ref.id} ${ref.kind} ${ref.value}: ${v.ok ? `verificada${v.details?.state ? ` (${v.details.state})` : ''}` : v.message}.`, { field: ref.id, oldValue: before, newValue: v.details?.state || v.status });
+}
+// Formato de la rama: identificador-titulo-descripcionCorta (p. ej. CRF-000001-cancelar-boletos-liberar-asiento).
+const slug = v => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+function branchName(r, shortDescription) {
+  const title = slug(r.title).split('-').slice(0, 6).join('-'), short = slug(shortDescription).split('-').slice(0, 6).join('-');
+  return `${r.id}-${title}-${short}`.replace(/-+/g, '-').slice(0, 100).replace(/-+$/, '');
+}
+function branchInput(r, data) {
+  const shortDescription = str(data, 'shortDescription', { required: true, min: 3, max: 60, label: 'Descripción corta' });
+  if (slug(shortDescription).length < 3) fail(400, 'Descripción corta: usa letras o números.', 'shortDescription');
+  const base = str(data, 'base', { max: 100, label: 'Rama base' }) || 'main';
+  if (!/^[\w.\/-]{1,100}$/.test(base)) fail(400, 'Rama base: nombre inválido.', 'base');
+  return { name: branchName(r, shortDescription), base, shortDescription, create: bool(data.create) };
+}
+function branchAction(db, r, user, data) {
+  requireAssignee(r, user);
+  requireState(r, ['En implementación']);
+  if (r.pullRequest && r.pullRequest.state !== 'cerrado sin fusionar') fail(409, 'La rama ya tiene un pull request; no puede reemplazarse.');
+  const input = branchInput(r, data), v = data[GITHUB_RESULT] || null;
+  const previous = r.workBranch?.name || null;
+  r.workBranch = { name: input.name, base: input.base, shortDescription: input.shortDescription, created: !!v?.created, verified: v?.ok === true, verification: v, by: user.name, at: now() };
+  r.gitRefs.push({ id: nextId(r.gitRefs, 'GIT'), kind: 'Rama', value: input.name, url: v?.details?.url || '', note: `Rama de trabajo (base ${input.base})`, by: user.name, at: now(), verified: v?.ok === true, verification: v });
+  log(db, r, user, 'Rama de trabajo', `${v?.created ? 'Creada en GitHub' : 'Registrada'}: ${input.name} (desde ${input.base}). ${v?.ok ? 'Verificada en GitHub.' : v?.message || 'Sin verificación en GitHub.'}`, { field: 'rama', oldValue: previous, newValue: input.name });
+}
+// El PR debe ir de la rama de trabajo a la rama base acordada; el servidor verifica head y base en GitHub.
+function pullRequestAction(db, r, user, data) {
+  requireAssignee(r, user);
+  requireState(r, ['En implementación']);
+  if (!r.workBranch) fail(409, 'Registra primero la rama de trabajo del cambio.');
+  const v = data[GITHUB_RESULT] || null, d = v?.details || {};
+  const number = Number(d.number || String(data.number || '').replace('#', ''));
+  if (!Number.isInteger(number) || number < 1) fail(400, 'Indica el número del pull request.', 'number');
+  const head = d.head || r.workBranch.name, base = d.base || str(data, 'base', { max: 100 }) || r.workBranch.base;
+  if (head !== r.workBranch.name) fail(400, `El PR #${number} sale de la rama «${head}», pero la rama de trabajo es «${r.workBranch.name}».`, 'number');
+  r.pullRequest = { number, url: d.url || '', title: d.title || '', head, base, state: d.state || 'sin verificar', created: !!v?.created, verified: v?.ok === true, verification: v, by: user.name, at: now() };
+  r.gitRefs.push({ id: nextId(r.gitRefs, 'GIT'), kind: 'Pull request', value: `#${number}`, url: d.url || '', note: `${head} → ${base}`, by: user.name, at: now(), verified: v?.ok === true, verification: v });
+  log(db, r, user, 'Pull request', `${v?.created ? 'Creado en GitHub' : 'Registrado'}: #${number} de ${head} a ${base}${d.state ? ` (${d.state})` : ''}. ${v?.ok ? 'Verificado en GitHub.' : v?.message || 'Sin verificación en GitHub.'}`);
 }
 function moduleChangeAction(db, r, user, data) {
   requireAssignee(r, user);
@@ -472,6 +511,8 @@ function sendToTests(db, r, user, data) {
   const round = currentRound(r);
   if (!round.activities.length) fail(409, 'Registra al menos una actividad de implementación en esta ronda.');
   if (!(r.changes || []).length) fail(409, 'Registra los módulos realmente modificados antes de enviar a pruebas.');
+  if (!r.workBranch) fail(409, 'Registra la rama de trabajo antes de enviar a pruebas.');
+  if (!r.pullRequest) fail(409, 'Crea o registra el pull request de la rama de trabajo antes de enviar a pruebas.');
   if (r.deviations.some(d => d.status === 'Pendiente')) fail(409, 'Hay desviaciones de alcance pendientes de decisión del CCC.');
   round.sentToTestsAt = now();
   transition(db, r, user, 'En pruebas', 'Envío a pruebas', str(data, 'note', { max: 2000 }) || `Ronda ${round.n} lista para pruebas.`);
@@ -583,6 +624,16 @@ function reopenAction(db, r, number, user, data) {
   transition(db, r, user, 'En análisis', 'Reapertura', reason);
 }
 
+// Comprobación previa (sin guardar) de las acciones que crean algo en GitHub.
+function preflight(db, id, user, action, data) {
+  const { r } = getRequest(db, id, user);
+  if (data.revision !== r.revision) fail(409, 'La solicitud cambió. Actualiza el expediente antes de guardar.');
+  requireAssignee(r, user);
+  requireState(r, ['En implementación']);
+  if (action === 'pull-request' && !r.workBranch) fail(409, 'Registra primero la rama de trabajo del cambio.');
+  if (action === 'branch' && r.pullRequest && r.pullRequest.state !== 'cerrado sin fusionar') fail(409, 'La rama ya tiene un pull request; no puede reemplazarse.');
+  return present(r);
+}
 // ---------- Despachador ----------
 function mutate(db, id, action, user, data) {
   const { r, number } = getRequest(db, id, user);
@@ -639,6 +690,8 @@ function mutate(db, id, action, user, data) {
     case 'activity': activityAction(db, r, user, data); break;
     case 'git': gitAction(db, r, user, data); break;
     case 'git-refresh': gitRefreshAction(db, r, user, data); break;
+    case 'branch': branchAction(db, r, user, data); break;
+    case 'pull-request': pullRequestAction(db, r, user, data); break;
     case 'module-change': moduleChangeAction(db, r, user, data); break;
     case 'deviation': deviationAction(db, r, user, data); break;
     case 'scope': scopeAction(db, r, user, data); break;
@@ -656,7 +709,7 @@ function mutate(db, id, action, user, data) {
 }
 // El CCC puede corregir cualquier CRF abierto. Los datos originales se conservan en `original`
 // y cada corrección queda registrada con su motivo y los campos modificados (RN-22, RN-35).
-const CRF_KEYS = ['project', 'modules', 'module', 'title', 'currentBehavior', 'featureMissing', 'description', 'justification', 'result', 'desiredDate', 'observations', 'modificationType', 'environment', 'currentVersion', 'targetVersion', 'spec', 'specUrl', 'businessRulesAffected', 'businessRules', 'acceptanceCriteria', 'components', 'proposedPriority'];
+const CRF_KEYS = ['project', 'modules', 'module', 'title', 'currentBehavior', 'featureMissing', 'description', 'justification', 'result', 'desiredDate', 'observations', 'proposedItilType', 'modificationType', 'environment', 'currentVersion', 'targetVersion', 'spec', 'specUrl', 'businessRulesAffected', 'businessRules', 'acceptanceCriteria', 'components', 'proposedPriority'];
 function cccCorrection(db, r, number, user, data) {
   requireCCC(r, user);
   if (r.status === 'Cerrada') fail(409, 'La solicitud está cerrada; reábrela para corregirla.');
@@ -751,4 +804,4 @@ function attachmentFor(db, attachmentId, user) {
 }
 function users(db) { return db.prepare("SELECT id,name,email,role FROM users WHERE active=1 AND role IN ('experto','ccc') ORDER BY name").all(); }
 
-module.exports = { HttpError, fail, str, pick, list, num, link, isoDate, bool, now, isCCC, isDev, parseCode, canView, snapshot, createRequest, mutate, uploadAttachments, trackRequest, publicClarification, requestDetail, attachmentFor, users, allVisible, modulesOf, authorizedModules, currentAuthorization, currentAssignment, reviewCriteria, gitInput, findGitRef, recordIssue, issueData, GITHUB_RESULT, EVAL_TEXT, EVAL_LIST, EVAL_NUM };
+module.exports = { preflight, branchInput, slug, HttpError, fail, str, pick, list, num, link, isoDate, bool, now, isCCC, isDev, parseCode, canView, snapshot, createRequest, mutate, uploadAttachments, trackRequest, publicClarification, requestDetail, attachmentFor, users, allVisible, modulesOf, authorizedModules, currentAuthorization, currentAssignment, reviewCriteria, gitInput, findGitRef, recordIssue, issueData, GITHUB_RESULT, EVAL_TEXT, EVAL_LIST, EVAL_NUM };

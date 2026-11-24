@@ -14,9 +14,9 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 function seedUsers(db, password, users = TEAM) {
   if(db.prepare('SELECT COUNT(*) AS n FROM users').get().n) return;
   if(!password || password.length<12) throw Error('Define SEED_PASSWORD con al menos 12 caracteres para crear las cuentas iniciales.');
-  const statement=db.prepare('INSERT INTO users(id,name,email,role,password_hash) VALUES(?,?,?,?,?)');
+  const statement=db.prepare('INSERT INTO users(id,name,email,role,password_hash,github) VALUES(?,?,?,?,?,?)');
   db.exec('BEGIN');
-  try { for(const u of users) statement.run(...u,hashPassword(password)); db.exec('COMMIT'); }
+  try { for(const [id,name,email,role,github] of users) statement.run(id,name,email,role,hashPassword(password),github||null); db.exec('COMMIT'); }
   catch(e){db.exec('ROLLBACK');throw e;}
 }
 function createSession(db,userId) {

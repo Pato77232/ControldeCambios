@@ -56,18 +56,25 @@ function dom() {
         const fix = await show('#editar/CRF-000004');
         assert.match(fix, /Motivo de la corrección/); assert.match(fix, /data-group="modules"/); assert.match(fix, /value="Notificaciones" checked/);
         const d1 = await show('#detalle/CRF-000001');
-        assert.match(d1, /Reabrir solicitud/); assert.match(d1, /Pruebas, revisión y cierre/); assert.doesNotMatch(d1, /Auditoría de configuración|data-jump="sec-tests"|data-jump="sec-audit"|data-jump="sec-ics"/); assert.match(d1, /Módulos realmente modificados/); assert.match(d1, /GitHub sin configurar/); assert.match(d1, /Define GITHUB_REPO/);
+        assert.match(d1, /Reabrir solicitud/); assert.match(d1, /Pruebas, revisión y cierre/); assert.doesNotMatch(d1, /Auditoría de configuración|data-jump="sec-tests"|data-jump="sec-ics"/); assert.match(d1, /data-jump="sec-audit"/); assert.match(d1, /Rama de trabajo y pull request/); assert.match(d1, /CRF-000001-permitir-la-cancelacion-de-boletos-liberar-asiento/); assert.match(d1, /class="markdown"/); assert.match(d1, /Módulos realmente modificados/); assert.match(d1, /GitHub sin configurar/); assert.match(d1, /Define GITHUB_REPO/);
         assert.doesNotMatch(d1, /Registrar ejecución de prueba/);
         assert.match(await show('#ics'), /Mis tareas/, 'las rutas de ICS vuelven al panel');
         const rep = await show('#reportes');
         assert.match(rep, /Por tipo ITIL/); assert.match(rep, /Exportar CSV/);
         assert.match(await show('#auditoria'), /Eventos persistentes/);
         const fichaHtml = await show('#ficha/CRF-000002');
-        assert.match(fichaHtml, /Esta ficha|Ficha del CCC/);
+        assert.match(fichaHtml, /Esta ficha|Ficha del CCC/); assert.match(fichaHtml, /md-field/); assert.match(fichaHtml, /Vista previa/);
+        const panel = await show('#panel?priority=Alta');
+        assert.match(panel, /id="panel-filter"/); assert.match(panel, /con los filtros aplicados/); assert.match(panel, /Por prioridad/);
       } else {
         assert.match(nav(), /Nueva solicitud/); assert.doesNotMatch(nav(), /Catálogo de ICS/);
         const form = await show('#nueva');
         assert.match(form, /Propuesta técnica/); assert.match(form, /identity-note/); assert.doesNotMatch(form, /id="f-name"|id="f-code"/); assert.match(form, /data-group="modules"/); assert.doesNotMatch(form, /suggestedIcs|ICS/); assert.match(form, /data-version/);
+        assert.match(form, /name="proposedItilType"/); assert.ok(form.indexOf('featureMissing') < form.indexOf('data-group="modules"'), 'la casilla va antes de los módulos');
+        assert.match(form, /id="f-currentVersion"/); assert.doesNotMatch(form, /id="f-currentVersion"[^>]*required/);
+        const work = await show('#trabajo/CRF-000001');
+        assert.match(work, /class="stepper"/); assert.match(work, /Rama de trabajo/); assert.match(work, /Pull request/);
+        assert.match(await show('#trabajo/CRF-000003'), /Seguimiento no disponible/, 'solo el asignado');
         assert.match(await show('#ficha/CRF-000001'), /Ficha no disponible/);
         const d = await show('#detalle/CRF-000001');
         assert.doesNotMatch(d, /Reabrir solicitud|Decidir la autorización/);

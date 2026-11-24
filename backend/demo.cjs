@@ -2,7 +2,7 @@
 // Base de demostración separada (backend/data/demo.sqlite). Nunca escribe en la base real.
 // Uso: npm run demo:reset  → crea la base con los casos de la defensa.
 //      npm run start:demo  → inicia el servidor sobre esa base.
-// La demostración no se conecta a GitHub: las referencias quedan sin verificar y no se crean issues.
+// La demostración no se conecta a GitHub: la rama, el PR y las referencias quedan sin verificar y no se crean issues.
 const fs = require('node:fs');
 const path = require('node:path');
 const { openDatabase, transaction } = require('./database.cjs');
@@ -22,9 +22,38 @@ function buildDemo(db) {
     impact: 'Alto', technicalImpact: 'Afecta reservas, el esquema de boletos y la liberación de asientos.', functionalImpact: 'Cambia la experiencia de compra y las políticas de las cooperativas.',
     risks: ['Liberación incorrecta de asientos', 'Reembolsos duplicados'], urgency: 'Media', priority: 'Alta', feasibility: 'Viable', feasibilityJustification: 'El equipo conoce el módulo y existen pruebas base.',
     effortHours: 24, durationDays: 5, resources: 'Un desarrollador y entorno de pruebas.', considerations: '',
-    rolloutObjective: 'Incorporar la cancelación sin afectar las ventas activas.', rolloutSteps: ['Crear rama de trabajo', 'Migrar el esquema en pruebas', 'Implementar la cancelación', 'Ejecutar pruebas', 'Publicar la versión'],
-    rolloutDependencies: 'Migración del esquema antes del código.', rolloutResponsibles: 'Desarrollador asignado.', rolloutChecks: 'Compra y cancelación en el entorno de pruebas.', rolloutCompletion: 'Criterios de aceptación verificados.',
-    backoutTriggers: 'Errores al liberar asientos o fallos de la migración.', backoutActions: ['Revertir el merge', 'Restaurar el respaldo del esquema'], backoutVersion: 'Versión 1.2.0', backoutData: 'Respaldar las reservas antes de migrar.', backoutResponsible: 'Desarrollador asignado', backoutVerification: 'Comprobar compra normal después de revertir.',
+    rolloutPlan: `## Objetivo
+Incorporar la cancelación sin afectar las ventas activas.
+
+## Actividades (en orden)
+1. Crear la rama de trabajo
+2. Migrar el esquema en pruebas
+3. Implementar la cancelación
+4. Ejecutar pruebas
+5. Publicar la versión
+
+## Dependencias
+Migración del esquema antes del código.
+
+## Verificaciones y criterio de finalización
+- Compra y cancelación correctas en pruebas
+- Criterios de aceptación verificados`,
+    backoutPlan: `## Condiciones de activación
+- Errores al liberar asientos
+- Fallos de la migración
+
+## Acciones de reversión
+1. Revertir el merge
+2. Restaurar el respaldo del esquema
+
+## Versión a recuperar
+Versión **1.2.0**
+
+## Precauciones con los datos
+Respaldar las reservas antes de migrar.
+
+## Responsable y verificación
+- Desarrollador asignado; comprobar una compra normal después de revertir`,
     testObjective: 'Verificar la cancelación y la liberación de asientos.', testTypes: 'Funcionales y de regresión.', testCriteria: ['El boleto se cancela antes de la salida', 'El asiento queda disponible'], testSuccess: 'Todas las pruebas superadas.', testEvidence: 'Capturas y registro de pruebas.',
     downtimeValue: 0, downtimeUnit: 'minutos', plannedDate: '2026-12-01T22:00', targetVersion: '1.3.0', ...extra
   });
@@ -38,10 +67,10 @@ function buildDemo(db) {
   act(e1, 'assign', david, { developerId: edwin.id, targetDate: '2026-12-05', notes: 'Seguir el rollout aprobado.' });
   act(e1, 'start', edwin, { conditionsAcknowledged: true });
   act(e1, 'activity', edwin, { description: 'Migración del esquema y lógica de cancelación', hours: 10, status: 'Completada' });
-  act(e1, 'git', edwin, { kind: 'Rama', value: 'feature/cancelacion-boletos' });
-  act(e1, 'git', edwin, { kind: 'Pull request', value: '#42', url: 'https://github.com/ejemplo/busesuta/pull/42', note: 'Enlace registrado manualmente.' });
+  act(e1, 'branch', edwin, { shortDescription: 'liberar asiento', base: 'main' });
   act(e1, 'module-change', edwin, { module: 'Reservas y pasajeros', operation: 'Modificación', description: 'Nuevo caso de uso de cancelación.' });
   act(e1, 'module-change', edwin, { module: 'Boletos QR e historial', operation: 'Modificación', description: 'Estado «cancelado» en el historial de boletos.' });
+  act(e1, 'pull-request', edwin, { number: 42, base: 'main' });
   act(e1, 'send-to-tests', edwin);
   act(e1, 'test', pablo, { name: 'Cancelar antes de la salida', expected: 'El boleto queda cancelado', obtained: 'Cancelado correctamente', status: 'Superada', criterion: 'El boleto se cancela antes de la salida' });
   act(e1, 'test', pablo, { name: 'Liberación del asiento', expected: 'Asiento disponible', obtained: 'Disponible en la búsqueda', status: 'Superada', criterion: 'El asiento queda disponible' });
@@ -50,20 +79,22 @@ function buildDemo(db) {
   act(e1, 'close', edwin, { result: 'Exitoso', summary: 'Cancelación de boletos disponible en la versión 1.3.0.', resultingVersion: '1.3.0' });
 
   // Ejemplo 2: técnicamente viable, pero rechazado por riesgo y prioridad.
-  const e2 = tx(() => S.createRequest(db, leslie, { requesterType: 'experto', modules: ['Pagos y comprobantes'], title: 'Reemplazar la pasarela de pagos', currentBehavior: 'La pasarela actual funciona con comisiones altas.', description: 'Migrar todos los pagos a un proveedor nuevo con otra API.', justification: 'Reducir comisiones a mediano plazo para las cooperativas.', result: 'Pagos procesados por el nuevo proveedor.', modificationType: 'Modificación', environment: 'Producción', currentVersion: 'No determinada', acceptanceCriteria: ['Los pagos se aprueban con el nuevo proveedor'], components: 'Servicio de pagos, conciliación' })).request.id;
+  const e2 = tx(() => S.createRequest(db, leslie, { requesterType: 'experto', modules: ['Pagos y comprobantes'], title: 'Reemplazar la pasarela de pagos', currentBehavior: 'La pasarela actual funciona con comisiones altas.', description: 'Migrar todos los pagos a un proveedor nuevo con otra API.', justification: 'Reducir comisiones a mediano plazo para las cooperativas.', result: 'Pagos procesados por el nuevo proveedor.', proposedItilType: 'Normal', modificationType: 'Modificación', environment: 'Producción', currentVersion: 'No determinada', acceptanceCriteria: ['Los pagos se aprueban con el nuevo proveedor'], components: 'Servicio de pagos, conciliación' })).request.id;
   act(e2, 'receive', david); act(e2, 'validate', david);
   act(e2, 'evaluation', david, { ...plan({ affectedModules: [{ module: 'Pagos y comprobantes', operation: 'Modificación' }], risks: ['Interrupción de ventas', 'Conciliación contable'], effortHours: 160, durationDays: 30 }), step: 'analysis' });
   act(e2, 'decision', david, { decision: 'Rechazado', justification: 'Es viable, pero el riesgo de interrumpir ventas y el esfuerzo superan el beneficio en este semestre.' });
   act(e2, 'close-rejected', david, { justification: 'Rechazo comunicado al solicitante.' });
 
   // Ejemplo 3: pruebas fallidas, correcciones y nueva ronda.
-  const e3 = tx(() => S.createRequest(db, shirley, { requesterType: 'experto', modules: ['Buses y plantillas de asientos'], title: 'Marcar asientos preferenciales', currentBehavior: 'Todos los asientos se muestran iguales.', description: 'Distinguir visualmente los asientos preferenciales en el selector.', justification: 'Facilitar la compra a personas con discapacidad y adultos mayores.', result: 'Asientos preferenciales identificados.', modificationType: 'Modificación', environment: 'Pruebas', currentVersion: '2.0.1', targetVersion: '2.1.0', acceptanceCriteria: ['Los asientos preferenciales tienen un icono distinto'] })).request.id;
+  const e3 = tx(() => S.createRequest(db, shirley, { requesterType: 'experto', modules: ['Buses y plantillas de asientos'], title: 'Marcar asientos preferenciales', currentBehavior: 'Todos los asientos se muestran iguales.', description: 'Distinguir visualmente los asientos preferenciales en el selector.', justification: 'Facilitar la compra a personas con discapacidad y adultos mayores.', result: 'Asientos preferenciales identificados.', proposedItilType: 'Estándar', modificationType: 'Modificación', environment: 'Pruebas', currentVersion: '2.0.1', targetVersion: '2.1.0', acceptanceCriteria: ['Los asientos preferenciales tienen un icono distinto'] })).request.id;
   toApproval(e3, { affectedModules: [{ module: 'Buses y plantillas de asientos', operation: 'Modificación' }], impact: 'Bajo', priority: 'Media', targetVersion: '2.1.0', testCriteria: ['Los asientos preferenciales tienen un icono distinto'] });
   act(e3, 'decision', david, { decision: 'Aprobado', justification: 'Cambio acotado con beneficio de accesibilidad.' });
   act(e3, 'assign', david, { developerId: shirley.id });
   act(e3, 'start', shirley);
   act(e3, 'activity', shirley, { description: 'Nuevo icono y leyenda', hours: 4 });
   act(e3, 'module-change', shirley, { module: 'Buses y plantillas de asientos', operation: 'Modificación', description: 'Icono de asiento preferencial.' });
+  act(e3, 'branch', shirley, { shortDescription: 'icono preferencial', base: 'main' });
+  act(e3, 'pull-request', shirley, { number: 57, base: 'main' });
   act(e3, 'send-to-tests', shirley);
   act(e3, 'test', leslie, { name: 'Icono preferencial visible', expected: 'Icono distinto', obtained: 'El icono no aparece en móviles', status: 'Fallida' });
   act(e3, 'finish-tests', leslie, { outcome: 'Existen fallos', incident: 'El icono no se muestra en pantallas pequeñas.' });
@@ -76,7 +107,7 @@ function buildDemo(db) {
   act(e3, 'close', shirley, { result: 'Exitoso', summary: 'Asientos preferenciales disponibles tras una corrección.', resultingVersion: '2.1.0' });
 
   // Una solicitud nueva queda pendiente para mostrar la recepción en vivo.
-  const e4 = tx(() => S.createRequest(db, pablo, { requesterType: 'experto', modules: ['Notificaciones'], title: 'Recordatorio antes del viaje', currentBehavior: 'No se envían recordatorios.', featureMissing: true, description: 'Enviar una notificación un día antes del viaje.', justification: 'Reducir los pasajeros que olvidan su viaje.', result: 'Recordatorio recibido.', modificationType: 'Adición', environment: 'Desarrollo', currentVersion: 'No determinada', acceptanceCriteria: ['Se envía una notificación 24 horas antes'], components: 'Servicio de notificaciones' })).request.id;
+  const e4 = tx(() => S.createRequest(db, pablo, { requesterType: 'experto', modules: ['Notificaciones'], title: 'Recordatorio antes del viaje', currentBehavior: 'No se envían recordatorios.', featureMissing: true, description: 'Enviar una notificación un día antes del viaje.', justification: 'Reducir los pasajeros que olvidan su viaje.', result: 'Recordatorio recibido.', proposedItilType: 'Normal', modificationType: 'Adición', environment: 'Desarrollo', currentVersion: 'No determinada', acceptanceCriteria: ['Se envía una notificación 24 horas antes'], components: 'Servicio de notificaciones' })).request.id;
   return { e1, e2, e3, e4 };
 }
 if (require.main === module) {

@@ -72,8 +72,10 @@ Concentrar análisis y autorización en el CCC es una simplificación académica
 - **Ficha única del CCC** (secciones A–E): clasificación ITIL estándar/normal/emergencia, impacto técnico y funcional, riesgos, urgencia, prioridad (con una sugerencia orientativa), viabilidad, esfuerzo y duración, rollout, backout, plan de pruebas, inactividad, fecha y versión objetivo. Permite guardar borradores, y la decisión forma parte de la misma ficha.
 - **Decisiones coherentes:** aprobar exige un análisis y una planificación completos. Un cambio no viable no puede aprobarse: el sistema informa el error. Las condiciones incluyen su forma de verificación. «Más información» no es un rechazo. Las reevaluaciones conservan las decisiones anteriores.
 - **Módulos afectados:** el solicitante marca uno o varios módulos de BusesUTA en tarjetas seleccionables; el CCC los confirma con la operación prevista y la decisión autoriza esos módulos.
-- **Implementación por rondas** con actividades, módulos realmente modificados y desviaciones de alcance que el CCC debe autorizar cuando se toca un módulo no autorizado.
-- **GitHub:** cada solicitud crea una issue que se actualiza en cada hito y se cierra con el CRF. Las referencias de Git se verifican en el repositorio antes de registrarlas.
+- **Seguimiento paso a paso del desarrollador:** iniciar, rama de trabajo (`identificador-titulo-descripcionCorta`), desarrollo (actividades, módulos modificados, commits), pull request de la rama de trabajo hacia la base y envío a pruebas. Modificar un módulo no autorizado genera una desviación que el CCC debe decidir.
+- **GitHub:** al aprobarse una solicitud se crea su issue, que se asigna al desarrollador, se comenta en cada hito y se cierra con el CRF. El sistema crea la rama de trabajo y el PR, o verifica los existentes. Ver [docs/github.md](docs/github.md).
+- **Planes de rollout y backout en Markdown** dentro de la ficha del CCC, con vista previa. El CRF técnico propone el tipo ITIL y la versión actual es opcional.
+- **Panel con filtros** por fechas, usuario, estado, módulo, tipo ITIL y prioridad, y **sección de auditoría** en cada expediente.
 - **Pruebas, revisión y cierre** en una sola sección del expediente. Las ejecuciones de prueba se conservan y las fallidas devuelven la solicitud a correcciones.
 - **Revisión postimplementación**, **backout ejecutado** (documentado, no simulado) y **cierre** exitoso, fallido o incompleto, separado del resultado de autorización y del administrativo. El CCC puede reabrir una solicitud cerrada.
 - **Auditoría persistente** de solo inserción, un panel por rol y **reportes** con filtros, gráficos, métricas calculadas con datos reales y exportación a CSV.
@@ -92,7 +94,7 @@ Las rutas autenticadas que modifican datos requieren el encabezado `X-CSRF-Token
 | `GET /api/requests` · `POST /api/requests` | Listado visible según el rol · crear CRF |
 | `GET /api/requests/:id` | Expediente con adjuntos, eventos de auditoría y módulos autorizados |
 | `PATCH` / `DELETE /api/requests/:id` | Editar o eliminar un CRF propio aún no recibido; el CCC corrige con `PATCH` y `correctionReason` |
-| `POST /api/requests/:id/:acción` | `receive`, `validate`, `request-info`, `clarification`, `evaluation` (`step`: draft/analysis/planning), `decision`, `reevaluate`, `assign`, `start`, `git-refresh`, `module-change`, `activity`, `git`, `deviation`, `scope`, `send-to-tests`, `test`, `finish-tests`, `backout`, `review`, `close`, `close-rejected`, `reopen` |
+| `POST /api/requests/:id/:acción` | `receive`, `validate`, `request-info`, `clarification`, `evaluation` (`step`: draft/analysis/planning), `decision`, `reevaluate`, `assign`, `start`, `branch`, `pull-request`, `git-refresh`, `module-change`, `activity`, `git`, `deviation`, `scope`, `send-to-tests`, `test`, `finish-tests`, `backout`, `review`, `close`, `close-rejected`, `reopen` |
 | `POST /api/requests/:id/attachments` · `GET /api/attachments/:id` | Subir y descargar archivos |
 | `POST /api/requests/:id/github-issue` · `GET /api/github/status` | Crear o sincronizar la issue (CCC) · estado de la conexión con GitHub |
 | `GET /api/reports` · `GET /api/reports.csv` · `GET /api/audit` | Reportes, CSV y auditoría |
