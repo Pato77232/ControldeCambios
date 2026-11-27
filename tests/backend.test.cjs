@@ -48,13 +48,10 @@ async function team(app) {
   return c;
 }
 const fullPlan = (affectedModules = [{ module: 'Reservas y pasajeros', operation: 'Modificación' }]) => ({
-  itilType: 'Normal', classificationJustification: 'Cambio funcional con evaluación ordinaria.', plannedChanges: 'Modificar ventas y esquema.', affectedModules,
-  impact: 'Medio', technicalImpact: 'Afecta ventas.', functionalImpact: 'Cambia la compra.', risks: 'Liberación incorrecta\nReembolsos duplicados', urgency: 'Media', priority: 'Alta',
-  feasibility: 'Viable', feasibilityJustification: 'Equipo con experiencia.', effortHours: 16, durationDays: 4, resources: 'No se requieren recursos adicionales.',
+  itilType: 'Normal', affectedModules, impact: 'Medio', urgency: 'Media', priority: 'Alta', risks: 'Liberación incorrecta\nReembolsos duplicados',
   rolloutPlan: '## Objetivo\nIncorporar la cancelación sin afectar ventas.\n\n## Actividades\n1. Rama de trabajo\n2. Implementación\n3. Pruebas',
   backoutPlan: '## Activación\n- Errores en ventas\n\n## Acciones\n1. Revertir el merge a la versión 1.2.0 con el respaldo previo',
-  testObjective: 'Verificar cancelación.', testTypes: 'Funcionales', testCriteria: ['El boleto se cancela'], testSuccess: 'Todas superadas.', testEvidence: 'Capturas.',
-  downtimeValue: 0, downtimeUnit: 'minutos', plannedDate: '2026-12-01T22:00', targetVersion: '1.3.0'
+  deadline: '2099-12-31'
 });
 
 test('seguridad: sesión, CSRF, origen, rutas privadas y permisos por rol', async () => {
@@ -72,7 +69,7 @@ test('seguridad: sesión, CSRF, origen, rutas privadas y permisos por rol', asyn
     const id = (await t.ana.call('/api/requests', 'POST', userCrf)).data.request.id;
     for (const c of [t.ana, t.leslie]) {
       assert.equal((await c.act(id, 'receive')).status, c === t.ana ? 403 : 403);
-      assert.equal((await c.act(id, 'decision', { decision: 'Aprobado', justification: 'Aprobación indebida.' })).status, 403);
+      assert.equal((await c.act(id, 'decision', { feasibility: 'Viable', decision: 'Aprobado', justification: 'Aprobación indebida.' })).status, 403);
     }
     // El usuario final no ve solicitudes ajenas.
     const other = (await t.leslie.call('/api/requests', 'POST', devCrf())).data.request.id;
@@ -193,10 +190,14 @@ test('ficha única del CCC: borrador, análisis, planificación y decisiones coh
     const draft = await t.david.ok(id, 'evaluation', { step: 'draft', itilType: 'Normal', impact: 'Alto' });
     assert.equal(draft.status, 'En análisis'); assert.equal(draft.evaluation.itilType, 'Normal'); assert.equal(draft.evaluation.analysisCompletedAt, undefined);
     const incomplete = await t.david.act(id, 'evaluation', { step: 'analysis', itilType: 'Normal' });
-    assert.equal(incomplete.status, 400); assert.match(incomplete.data.error, /Impacto técnico/);
-    assert.equal((await t.david.act(id, 'evaluation', { ...fullPlan(), effortHours: -3, step: 'draft' })).status, 400, 'esfuerzo negativo');
+    assert.equal(incomplete.status, 400); assert.match(incomplete.data.error, /Urgencia/);
+    assert.equal((await t.david.act(id, 'evaluation', { ...fullPlan(), deadline: '2026-02-30', step: 'draft' })).data.field, 'deadline', 'fecha límite inválida');
+    const pastDeadline = await t.david.act(id, 'evaluation', { ...fullPlan(), deadline: '2020-01-01', step: 'planning' });
+    assert.equal(pastDeadline.status, 400); assert.equal(pastDeadline.data.field, 'deadline');
+    const noDeadline = await t.david.act(id, 'evaluation', { ...fullPlan(), deadline: '', step: 'planning' });
+    assert.equal(noDeadline.status, 400); assert.match(noDeadline.data.error, /Fecha límite/);
     // Fallo 3: no se puede aprobar antes de completar la planificación.
-    assert.equal((await t.david.act(id, 'decision', { decision: 'Aprobado', justification: 'Intento prematuro.' })).status, 409);
+    assert.equal((await t.david.act(id, 'decision', { feasibility: 'Viable', decision: 'Aprobado', justification: 'Intento prematuro.' })).status, 409);
     // Otro integrante del CCC no puede tomar una ficha ajena.
     assert.equal((await t.maria.act(id, 'evaluation', { step: 'draft' })).status, 403);
     const template = await t.david.act(id, 'evaluation', { ...fullPlan(), rolloutPlan: '## Objetivo\n\n## Actividades\n1. \n2. ', step: 'planning' });
@@ -207,22 +208,20 @@ test('ficha única del CCC: borrador, análisis, planificación y decisiones coh
     // Una modificación posterior obliga a completar de nuevo la planificación.
     const changed = await t.david.ok(id, 'evaluation', { ...fullPlan(), impact: 'Alto', step: 'draft' });
     assert.equal(changed.status, 'En planificación');
-    await t.david.ok(id, 'evaluation', { ...fullPlan(), feasibility: 'No viable', step: 'planning' });
-    // Caso D: un cambio no viable no puede aprobarse, ni siquiera con condiciones; se informa el error.
-    for (const decision of ['Aprobado', 'Aprobado con condiciones']) {
-      const blocked = await t.david.act(id, 'decision', { decision, justification: 'Se aprueba igualmente.', conditions: [{ text: 'X', verification: 'Y' }] });
-      assert.equal(blocked.status, 409); assert.match(blocked.data.error, /No viable/); assert.equal(blocked.data.field, 'decision');
-    }
-    // Versión objetivo: formato válido y mayor que la versión actual del CRF.
-    const badVersion = await t.david.act(id, 'evaluation', { ...fullPlan(), targetVersion: '1.3', step: 'draft' });
-    assert.equal(badVersion.status, 400); assert.equal(badVersion.data.field, 'targetVersion');
     await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'planning' });
-    assert.equal((await t.david.act(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Se aprueba con condiciones.', conditions: [{ text: 'Respaldo', verification: '' }] })).status, 400);
-    assert.equal((await t.david.act(id, 'decision', { decision: 'Aprobado', justification: 'Con condiciones ocultas.', conditions: [{ text: 'X', verification: 'Y' }] })).status, 400);
-    const approved = await t.david.ok(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Beneficio alto con riesgo controlado.', conditions: [{ text: 'Respaldar la base', verification: 'Evidencia en la revisión' }] });
+    // Caso D: la viabilidad se decide al aprobar; un cambio no viable no puede aprobarse y se informa el error.
+    const noFeasibility = await t.david.act(id, 'decision', { decision: 'Aprobado' });
+    assert.equal(noFeasibility.status, 400); assert.equal(noFeasibility.data.field, 'feasibility');
+    for (const decision of ['Aprobado', 'Aprobado con condiciones']) {
+      const blocked = await t.david.act(id, 'decision', { decision, feasibility: 'No viable', conditions: [{ text: 'X', verification: 'Y' }] });
+      assert.equal(blocked.status, 409); assert.match(blocked.data.error, /No viable/); assert.equal(blocked.data.field, 'feasibility');
+    }
+    assert.equal((await t.david.act(id, 'decision', { feasibility: 'Viable', decision: 'Aprobado con condiciones', justification: 'Se aprueba con condiciones.', conditions: [{ text: 'Respaldo', verification: '' }] })).status, 400);
+    assert.equal((await t.david.act(id, 'decision', { feasibility: 'Viable', decision: 'Aprobado', justification: 'Con condiciones ocultas.', conditions: [{ text: 'X', verification: 'Y' }] })).status, 400);
+    const approved = await t.david.ok(id, 'decision', { feasibility: 'Viable', decision: 'Aprobado con condiciones', justification: 'Beneficio alto con riesgo controlado.', conditions: [{ text: 'Respaldar la base', verification: 'Evidencia en la revisión' }] });
     assert.equal(approved.status, 'Aprobada con condiciones');
     const decision = approved.decisions.at(-1);
-    assert.equal(decision.conditions[0].id, 'C1'); assert.equal(decision.evaluationSnapshot.feasibility, 'Viable');
+    assert.equal(decision.conditions[0].id, 'C1'); assert.equal(decision.feasibility, 'Viable');
     assert.deepEqual(approved.decisions.at(-1).authorizedModules, [{ module: 'Reservas y pasajeros', operation: 'Modificación' }]);
     assert.deepEqual((await t.david.call(`/api/requests/${id}`)).data.authorizedModules, ['Reservas y pasajeros']);
     const noModules = await t.david.act(id, 'reevaluate', { reason: 'Revisar los módulos afectados.' });
@@ -231,7 +230,7 @@ test('ficha única del CCC: borrador, análisis, planificación y decisiones coh
     assert.equal(missing.status, 400); assert.match(missing.data.error, /Módulos afectados/);
     assert.equal((await t.david.act(id, 'evaluation', { ...fullPlan([{ module: 'No estoy seguro', operation: 'Modificación' }]), step: 'draft' })).data.field, 'affectedModules');
     await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'planning' });
-    await t.david.ok(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Beneficio alto con riesgo controlado.', conditions: [{ text: 'Respaldar la base', verification: 'Evidencia en la revisión' }] });
+    await t.david.ok(id, 'decision', { feasibility: 'Viable', decision: 'Aprobado con condiciones', justification: 'Beneficio alto con riesgo controlado.', conditions: [{ text: 'Respaldar la base', verification: 'Evidencia en la revisión' }] });
     // Reevaluar conserva la decisión anterior como sustituida.
     const re = await t.david.ok(id, 'reevaluate', { reason: 'Cambió la disponibilidad del equipo.' });
     assert.equal(re.status, 'En planificación'); assert.equal(re.decisions.filter(d => d.kind === 'Autorización').every(d => d.superseded), true);
@@ -241,7 +240,7 @@ test('ficha única del CCC: borrador, análisis, planificación y decisiones coh
     await t.david.ok(c, 'receive'); await t.david.ok(c, 'validate');
     await t.david.ok(c, 'evaluation', { ...fullPlan(), rolloutPlan: '', step: 'analysis' });
     assert.equal((await t.david.act(c, 'decision', { decision: 'Rechazado', justification: '' })).status, 400);
-    const rejected = await t.david.ok(c, 'decision', { decision: 'Rechazado', justification: 'Viable, pero el costo supera el beneficio.' });
+    const rejected = await t.david.ok(c, 'decision', { decision: 'Rechazado', feasibility: 'Viable', justification: 'Viable, pero el costo supera el beneficio.' });
     assert.equal(rejected.status, 'Rechazada'); assert.equal(rejected.evaluation.feasibility, 'Viable');
     assert.ok(rejected.notices.some(n => /rechazada/.test(n.message)));
     // RN-05: una rechazada no se asigna ni se implementa.
@@ -254,7 +253,7 @@ test('ficha única del CCC: borrador, análisis, planificación y decisiones coh
     await t.david.ok(m, 'receive'); await t.david.ok(m, 'validate');
     const info = await t.david.ok(m, 'decision', { decision: 'Más información', justification: 'Falta el detalle de reglas de negocio.' });
     assert.equal(info.status, 'Pendiente de información');
-    assert.equal((await t.david.act(m, 'decision', { decision: 'Aprobado', justification: 'Sin esperar la respuesta.' })).status, 409);
+    assert.equal((await t.david.act(m, 'decision', { feasibility: 'Viable', decision: 'Aprobado', justification: 'Sin esperar la respuesta.' })).status, 409);
     await t.shirley.ok(m, 'clarification', { note: 'RN-02 y RN-20.' });
     assert.equal((await t.shirley.call(`/api/requests/${m}`)).data.request.status, 'En validación');
   } finally { await stop(app); }
@@ -268,7 +267,7 @@ test('ejecución: asignación, implementación, desviación, pruebas fallidas, r
     const id = (await t.leslie.call('/api/requests', 'POST', devCrf())).data.request.id;
     await t.david.ok(id, 'receive'); await t.david.ok(id, 'validate');
     await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'planning' });
-    await t.david.ok(id, 'decision', { decision: 'Aprobado con condiciones', justification: 'Beneficio alto.', conditions: [{ text: 'Respaldar la base', verification: 'Captura del respaldo' }] });
+    await t.david.ok(id, 'decision', { feasibility: 'Viable', decision: 'Aprobado con condiciones', justification: 'Beneficio alto.', conditions: [{ text: 'Respaldar la base', verification: 'Captura del respaldo' }] });
     assert.equal((await t.david.act(id, 'assign', { developerId: 'user-ana' })).status, 400, 'solo desarrolladores');
     assert.equal((await t.leslie.act(id, 'assign', { developerId: 'team-edwin' })).status, 403);
     await t.david.ok(id, 'assign', { developerId: 'team-edwin', targetDate: '2099-01-10' });
@@ -301,14 +300,14 @@ test('ejecución: asignación, implementación, desviación, pruebas fallidas, r
     // Rama de trabajo con formato identificador-titulo-descripcionCorta y PR desde esa rama.
     assert.equal((await t.edwin.act(id, 'send-to-tests')).status, 409, 'sin rama ni PR');
     assert.equal((await t.edwin.act(id, 'pull-request', { number: 4 })).status, 409, 'el PR requiere la rama');
-    assert.equal((await t.pablo.act(id, 'branch', { shortDescription: 'liberar asiento' })).status, 403, 'solo el asignado');
-    assert.equal((await t.edwin.act(id, 'branch', { shortDescription: '!!' })).data.field, 'shortDescription');
-    const branch = await t.edwin.ok(id, 'branch', { shortDescription: 'Liberar asiento', base: 'develop' });
-    assert.equal(branch.workBranch.name, `${id}-cancelacion-tecnica-liberar-asiento`); assert.equal(branch.workBranch.base, 'develop'); assert.equal(branch.workBranch.verified, false);
+    assert.equal((await t.pablo.act(id, 'branch', { name: 'liberar asiento' })).status, 403, 'solo el asignado');
+    assert.equal((await t.edwin.act(id, 'branch', { name: '!!' })).data.field, 'name');
+    const branch = await t.edwin.ok(id, 'branch', { name: 'Liberar asiento', base: 'develop' });
+    assert.equal(branch.workBranch.name, `feature/${id}-liberar-asiento`, 'cambio normal: feature/'); assert.equal(branch.workBranch.base, 'main', 'la base la define el sistema'); assert.equal(branch.workBranch.verified, false);
     assert.equal((await t.edwin.act(id, 'send-to-tests')).status, 409, 'sin PR');
     const pr = await t.edwin.ok(id, 'pull-request', { number: '#4' });
-    assert.equal(pr.pullRequest.head, branch.workBranch.name); assert.equal(pr.pullRequest.base, 'develop');
-    assert.equal((await t.edwin.act(id, 'branch', { shortDescription: 'otra rama' })).status, 409, 'con PR la rama no se reemplaza');
+    assert.equal(pr.pullRequest.head, branch.workBranch.name); assert.equal(pr.pullRequest.base, 'main');
+    assert.equal((await t.edwin.act(id, 'branch', { name: 'otra rama' })).status, 409, 'con PR la rama no se reemplaza');
     await t.edwin.ok(id, 'send-to-tests');
     // Caso J: pruebas fallidas → correcciones, sin sobrescribir la ronda anterior.
     assert.equal((await t.pablo.act(id, 'finish-tests', { outcome: 'Todas superadas' })).status, 409, 'sin pruebas');
@@ -343,13 +342,14 @@ test('ejecución: asignación, implementación, desviación, pruebas fallidas, r
     // Cierre fallido con backout y cierre incompleto.
     const f = (await t.leslie.call('/api/requests', 'POST', devCrf())).data.request.id;
     await t.david.ok(f, 'receive'); await t.david.ok(f, 'validate');
-    await t.david.ok(f, 'evaluation', { ...fullPlan(), itilType: 'Emergencia', classificationJustification: 'Caída de ventas en producción que exige atención inmediata.', rolloutPlan: '1. Aplicar el parche urgente', backoutPlan: '1. Revertir el despliegue', testTypes: '', step: 'planning' });
-    await t.david.ok(f, 'decision', { decision: 'Aprobado', justification: 'Emergencia autorizada.' });
+    await t.david.ok(f, 'evaluation', { ...fullPlan(), itilType: 'Emergencia', rolloutPlan: '1. Aplicar el parche urgente', backoutPlan: '1. Revertir el despliegue', step: 'planning' });
+    await t.david.ok(f, 'decision', { feasibility: 'Viable', decision: 'Aprobado', justification: 'Emergencia autorizada.' });
     await t.david.ok(f, 'assign', { developerId: 'team-shirley' });
     await t.shirley.ok(f, 'start');
     await t.shirley.ok(f, 'activity', { description: 'Parche urgente', hours: 1 });
     await t.shirley.ok(f, 'module-change', { module: 'Reservas y pasajeros', operation: 'Modificación', description: 'Parche.' });
-    await t.shirley.ok(f, 'branch', { shortDescription: 'parche urgente' });
+    const hotfix = await t.shirley.ok(f, 'branch', { name: 'parche urgente' });
+    assert.equal(hotfix.workBranch.name, `hotfix/${f}-parche-urgente`, 'emergencia: hotfix/');
     await t.shirley.ok(f, 'pull-request', { number: 9 });
     await t.shirley.ok(f, 'send-to-tests');
     await t.leslie.ok(f, 'test', { name: 'Ventas', expected: 'OK', obtained: 'Falla', status: 'Fallida' });
@@ -410,7 +410,7 @@ test('migración del modelo anterior: conserva datos, códigos y marca incoheren
     const analysis = { impact: 'Medio', technicalImpact: 't', risks: 'r', feasibility: 'Viable', effort: '8 h', resources: 'r', considerations: 'c', priority: 'Alta', analyst: 'David', analystId: 'team-david', date: '2026-10-02T10:00:00.000Z' };
     const docs = [
       { ...base, id: 'SCR-0001', status: 'Pendiente', resolutions: [] },
-      { ...base, id: 'SCR-0002', status: 'Aprobada', analysis, resolutions: [{ decision: 'Aprobado', decisionNote: 'Ok', conditions: '', responsible: 'David', responsibleId: 'team-david', date: '2026-10-03T10:00:00.000Z' }] },
+      { ...base, id: 'SCR-0002', status: 'Aprobada', analysis, resolutions: [{ feasibility: 'Viable', decision: 'Aprobado', decisionNote: 'Ok', conditions: '', responsible: 'David', responsibleId: 'team-david', date: '2026-10-03T10:00:00.000Z' }] },
       { ...base, id: 'SCR-0003', status: 'Más información', analysis, resolutions: [{ decision: 'Más información', decisionNote: 'Falta detalle', responsible: 'David', date: '2026-10-03T10:00:00.000Z' }] }
     ];
     for (const d of docs) old.prepare('INSERT INTO requests(owner_id,document) VALUES(?,?)').run(d.ownerId, JSON.stringify(d));
@@ -524,7 +524,7 @@ test('GitHub: issue al aprobar, asignación, rama y PR del cambio, y verificaci�
     assert.equal(gh.state.issues.length, 0, 'un rechazo no crea issue');
     await t.david.ok(id, 'receive'); await t.david.ok(id, 'validate');
     await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'planning' });
-    const approved = await t.david.ok(id, 'decision', { decision: 'Aprobado', justification: 'Cambio acotado y viable.' });
+    const approved = await t.david.ok(id, 'decision', { feasibility: 'Viable', decision: 'Aprobado', justification: 'Cambio acotado y viable.' });
     assert.equal(approved.github.issue.number, 1); assert.equal(gh.state.issues.length, 1);
     const issue = gh.state.issues[0];
     assert.equal(issue.title, `[${id}] Cancelación técnica`); assert.match(issue.body, /http:\/\/cambios\.example\/#detalle\//);
@@ -539,11 +539,9 @@ test('GitHub: issue al aprobar, asignación, rama y PR del cambio, y verificaci�
     await t.edwin.ok(id, 'start');
     assert.ok(issue.labels.some(l => l.name === 'estado: en implementación'));
     // Rama de trabajo creada en GitHub desde la base, con el formato del CRF.
-    assert.equal((await t.edwin.act(id, 'branch', { shortDescription: 'liberar asiento', base: 'no-existe', create: true })).data.field, 'base');
-    const missing = await t.edwin.act(id, 'branch', { shortDescription: 'liberar asiento' });
-    assert.equal(missing.status, 400); assert.match(missing.data.error, /no existe en org\/busesuta/);
-    const branch = await t.edwin.ok(id, 'branch', { shortDescription: 'liberar asiento', create: true });
-    const name = `${id}-cancelacion-tecnica-liberar-asiento`;
+    const branch = await t.edwin.ok(id, 'branch', { name: 'liberar asiento', base: 'otra', create: false });
+    const name = `feature/${id}-liberar-asiento`;
+    assert.equal(branch.workBranch.base, 'main', 'base: rama principal del repositorio');
     assert.equal(branch.workBranch.name, name); assert.equal(branch.workBranch.created, true); assert.equal(branch.workBranch.verified, true);
     assert.ok(gh.state.branches[name], 'la rama existe en GitHub');
     assert.match(gh.state.comments.at(-1).body, /Rama de trabajo/);
@@ -578,7 +576,7 @@ test('GitHub: issue al aprobar, asignación, rama y PR del cambio, y verificaci�
     const other = (await t.leslie.call('/api/requests', 'POST', devCrf({ title: 'Otro cambio' }))).data.request.id;
     await t.david.ok(other, 'receive'); await t.david.ok(other, 'validate');
     await t.david.ok(other, 'evaluation', { ...fullPlan(), step: 'planning' });
-    await t.david.ok(other, 'decision', { decision: 'Aprobado', justification: 'Cambio acotado y viable.' });
+    await t.david.ok(other, 'decision', { feasibility: 'Viable', decision: 'Aprobado', justification: 'Cambio acotado y viable.' });
     const assigned = await t.david.ok(other, 'assign', { developerId: 'team-shirley' });
     assert.match(assigned.github.lastSync.message, /No se pudo asignar a NoColaborador/);
     assert.equal((await t.edwin.call(`/api/requests/${id}/github-issue`, 'POST', {})).status, 403);
@@ -591,7 +589,7 @@ test('GitHub no disponible: el flujo sigue y la issue puede reintentarse', async
     const id = (await t.leslie.call('/api/requests', 'POST', devCrf())).data.request.id;
     await t.david.ok(id, 'receive'); await t.david.ok(id, 'validate');
     await t.david.ok(id, 'evaluation', { ...fullPlan(), step: 'planning' });
-    const approved = await t.david.ok(id, 'decision', { decision: 'Aprobado', justification: 'Cambio acotado y viable.' });
+    const approved = await t.david.ok(id, 'decision', { feasibility: 'Viable', decision: 'Aprobado', justification: 'Cambio acotado y viable.' });
     assert.equal(approved.status, 'Aprobada', 'GitHub caído no impide aprobar');
     assert.equal(approved.github.lastSync.ok, false); assert.equal(approved.github.issue, undefined);
     const retry = await t.david.call(`/api/requests/${id}/github-issue`, 'POST', {});

@@ -56,7 +56,7 @@ function dom() {
         const fix = await show('#editar/CRF-000004');
         assert.match(fix, /Motivo de la corrección/); assert.match(fix, /data-group="modules"/); assert.match(fix, /value="Notificaciones" checked/);
         const d1 = await show('#detalle/CRF-000001');
-        assert.match(d1, /Reabrir solicitud/); assert.match(d1, /Pruebas, revisión y cierre/); assert.doesNotMatch(d1, /Auditoría de configuración|data-jump="sec-tests"|data-jump="sec-ics"/); assert.match(d1, /data-jump="sec-audit"/); assert.match(d1, /Rama de trabajo y pull request/); assert.match(d1, /CRF-000001-permitir-la-cancelacion-de-boletos-liberar-asiento/); assert.match(d1, /class="markdown"/); assert.match(d1, /Módulos realmente modificados/); assert.match(d1, /GitHub sin configurar/); assert.match(d1, /Define GITHUB_REPO/);
+        assert.match(d1, /Reabrir solicitud/); assert.match(d1, /Pruebas, revisión y cierre/); assert.doesNotMatch(d1, /Auditoría de configuración|data-jump="sec-tests"|data-jump="sec-ics"/); assert.match(d1, /data-jump="sec-audit"/); assert.match(d1, /Rama de trabajo y pull request/); assert.match(d1, /feature\/CRF-000001-liberar-asiento/); assert.match(d1, /class="markdown"/); assert.match(d1, /Módulos realmente modificados/); assert.match(d1, /GitHub sin configurar/); assert.match(d1, /Define GITHUB_REPO/);
         assert.doesNotMatch(d1, /Registrar ejecución de prueba/);
         assert.match(await show('#ics'), /Mis tareas/, 'las rutas de ICS vuelven al panel');
         const rep = await show('#reportes');

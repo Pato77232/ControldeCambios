@@ -147,7 +147,7 @@ function requestFields(db, data, kind, date) {
   f.modules = parseModules(data);
   f.module = f.modules[0];
   f.title = str(data, 'title', { required: true, max: 120, min: 5, label: 'Título' });
-  f.currentBehavior = str(data, 'currentBehavior', { required: true, label: 'Situación o comportamiento actual' });
+  f.currentBehavior = str(data, 'currentBehavior', { label: 'Situación o comportamiento actual' });
   f.featureMissing = bool(data.featureMissing);
   f.description = str(data, 'description', { required: true, min: 20, label: 'Descripción del cambio' });
   f.justification = str(data, 'justification', { required: true, min: 20, label: 'Justificación' });
@@ -201,27 +201,23 @@ function createRequest(db, user, data) {
 }
 
 // ---------- Ficha del CCC ----------
+// Ficha mínima: clasificación y módulos (A), impacto y riesgos (B), planes y fecha límite (C).
 const EVAL_TEXT = {
-  classificationJustification: 'Justificación de la clasificación', standardReference: 'Procedimiento estándar de referencia', plannedChanges: 'Conjunto de modificaciones previstas',
-  technicalImpact: 'Impacto técnico previsto', functionalImpact: 'Impacto funcional u operativo',
-  feasibilityJustification: 'Justificación de viabilidad', resources: 'Recursos necesarios', considerations: 'Consideraciones adicionales',
-  rolloutPlan: 'Plan de rollout', backoutPlan: 'Plan de backout',
-  testObjective: 'Objetivo de las pruebas', testTypes: 'Tipos de prueba previstos', testSuccess: 'Condiciones de éxito', testEvidence: 'Evidencias esperadas',
-  plannedDate: 'Fecha prevista de implementación', targetVersion: 'Versión objetivo'
+  standardReference: 'Procedimiento estándar de referencia', functionalImpact: 'Impacto en los usuarios', resources: 'Recursos necesarios', considerations: 'Consideraciones adicionales',
+  rolloutPlan: 'Plan de rollout', backoutPlan: 'Plan de backout', deadline: 'Fecha límite de implementación'
 };
-const EVAL_LIST = { risks: 'Riesgos identificados', testCriteria: 'Criterios de aceptación para pruebas' };
-const EVAL_ENUM = { itilType: [Object.keys(C.ITIL), 'un tipo de cambio ITIL'], impact: [C.IMPACT, 'un impacto'], urgency: [C.LEVELS, 'una urgencia'], priority: [C.LEVELS, 'una prioridad'], feasibility: [C.FEASIBILITY, 'una viabilidad'], downtimeUnit: [C.DOWNTIME_UNITS, 'una unidad de inactividad'] };
-const EVAL_NUM = { effortHours: 'Esfuerzo estimado (horas-persona)', durationDays: 'Duración estimada (días calendario)', downtimeValue: 'Tiempo de inactividad previsto' };
+const EVAL_LIST = { risks: 'Riesgos identificados' };
+const EVAL_ENUM = { itilType: [Object.keys(C.ITIL), 'un tipo de cambio ITIL'], impact: [C.IMPACT, 'un impacto'], urgency: [C.LEVELS, 'una urgencia'], priority: [C.LEVELS, 'una prioridad'] };
+const EVAL_NUM = {};
 const EVAL_KEYS = [...Object.keys(EVAL_TEXT), ...Object.keys(EVAL_LIST), ...Object.keys(EVAL_ENUM), ...Object.keys(EVAL_NUM), 'standardSameConditions', 'affectedModules'];
 function parseEvaluation(db, data, r) {
   const e = {};
-  for (const [k, label] of Object.entries(EVAL_TEXT)) e[k] = str(data, k, { max: ['targetVersion', 'plannedDate'].includes(k) ? 40 : ['rolloutPlan', 'backoutPlan'].includes(k) ? 20000 : 5000, label });
+  for (const [k, label] of Object.entries(EVAL_TEXT)) e[k] = str(data, k, { max: k === 'deadline' ? 10 : ['rolloutPlan', 'backoutPlan'].includes(k) ? 20000 : 5000, label });
   for (const [k, label] of Object.entries(EVAL_LIST)) e[k] = list(data, k, { label });
   for (const [k, [values, label]] of Object.entries(EVAL_ENUM)) e[k] = pick(data[k], values, label, { required: false, field: k });
   for (const [k, label] of Object.entries(EVAL_NUM)) e[k] = num(data, k, { label, max: k === 'durationDays' ? 3650 : 100000 });
   e.standardSameConditions = bool(data.standardSameConditions);
-  if (e.plannedDate && (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(e.plannedDate) || Number.isNaN(Date.parse(e.plannedDate)))) fail(400, 'Fecha prevista de implementación: fecha inválida.', 'plannedDate');
-  version(e.targetVersion, 'Versión objetivo', 'targetVersion', { allow: ['Pendiente'], greaterThan: r?.currentVersion });
+  e.deadline = isoDate(e.deadline, 'Fecha límite de implementación', null, 'deadline');
   if (e.standardReference) e.standardReference = e.standardReference.toUpperCase();
   // Módulos confirmados por el CCC, cada uno con la operación prevista.
   const raw = Array.isArray(data.affectedModules) ? data.affectedModules : [];
@@ -233,14 +229,9 @@ function missingAnalysis(e) {
   const m = [];
   const need = (ok, label) => { if (!ok) m.push(label); };
   need(e.itilType, 'Tipo de cambio ITIL');
-  need(e.classificationJustification, EVAL_TEXT.classificationJustification);
   need(e.affectedModules?.length, 'Módulos afectados confirmados por el CCC');
-  need(e.plannedChanges, EVAL_TEXT.plannedChanges);
-  for (const k of ['impact', 'urgency', 'priority', 'feasibility']) need(e[k], { impact: 'Impacto estimado', urgency: 'Urgencia', priority: 'Prioridad', feasibility: 'Viabilidad técnica' }[k]);
-  for (const k of ['technicalImpact', 'functionalImpact', 'feasibilityJustification', 'resources']) need(e[k], EVAL_TEXT[k]);
+  for (const k of ['impact', 'urgency', 'priority']) need(e[k], { impact: 'Impacto estimado', urgency: 'Urgencia', priority: 'Prioridad' }[k]);
   need(e.risks?.length, EVAL_LIST.risks);
-  need(e.effortHours !== null && e.effortHours !== undefined, EVAL_NUM.effortHours);
-  need(e.durationDays !== null && e.durationDays !== undefined, EVAL_NUM.durationDays);
   return m;
 }
 // Contenido real de un plan en Markdown: sin títulos, viñetas vacías ni la plantilla sin completar.
@@ -251,13 +242,7 @@ function missingPlanning(e) {
   const minimum = e.itilType === 'Emergencia' ? 15 : 40;
   need(planContent(e.rolloutPlan).length >= minimum, `${EVAL_TEXT.rolloutPlan} (describe objetivo, actividades en orden y verificaciones)`);
   need(planContent(e.backoutPlan).length >= minimum, `${EVAL_TEXT.backoutPlan} (condiciones de activación, acciones de reversión y verificación)`);
-  need(e.testCriteria?.length, EVAL_LIST.testCriteria);
-  need(e.downtimeValue !== null && e.downtimeValue !== undefined, EVAL_NUM.downtimeValue);
-  need(e.downtimeUnit, 'Unidad del tiempo de inactividad');
-  need(e.plannedDate, EVAL_TEXT.plannedDate);
-  if (e.itilType !== 'Emergencia') {
-    for (const k of ['testObjective', 'testTypes', 'testSuccess', 'testEvidence']) need(e[k], EVAL_TEXT[k]);
-  }
+  need(e.deadline, `${EVAL_TEXT.deadline} para el desarrollador`);
   return m;
 }
 function checkStandardReference(db, e) {
@@ -303,14 +288,14 @@ function evaluationAction(db, r, number, user, data) {
   const missingA = missingAnalysis(r.evaluation);
   if (missingA.length) fail(400, `Para completar el análisis falta: ${missingA.join('; ')}.`);
   const reference = checkStandardReference(db, r.evaluation);
-  if (r.evaluation.itilType === 'Emergencia' && r.evaluation.classificationJustification.length < 30) fail(400, 'Un cambio de emergencia requiere explicar en al menos 30 caracteres la situación que exige el procedimiento acelerado.', 'classificationJustification');
   r.priority = r.evaluation.priority;
   if (r.status === 'En análisis') {
     r.evaluation.analysisCompletedAt = now();
-    transition(db, r, user, 'En planificación', 'Análisis completado', `Tipo ${r.evaluation.itilType}; impacto ${r.evaluation.impact}; viabilidad ${r.evaluation.feasibility}${reference ? `; procedimiento estándar ${reference}` : ''}.`);
+    transition(db, r, user, 'En planificación', 'Análisis completado', `Tipo ${r.evaluation.itilType}; impacto ${r.evaluation.impact}; prioridad ${r.evaluation.priority}${reference ? `; procedimiento estándar ${reference}` : ''}.`);
   }
   if (step === 'planning') {
     const missingP = missingPlanning(r.evaluation);
+    if (r.evaluation.deadline && r.evaluation.deadline < localDate()) fail(400, 'Fecha límite de implementación: no puede ser anterior a hoy.', 'deadline');
     if (missingP.length) fail(400, `Para completar la planificación falta: ${missingP.join('; ')}.`);
     r.evaluation.planningCompletedAt = now();
     transition(db, r, user, 'Pendiente de aprobación', 'Planificación completada', 'Planes de rollout, backout y pruebas documentados.');
@@ -328,8 +313,12 @@ function parseConditions(data) {
 function decisionAction(db, r, number, user, data) {
   requireCCC(r, user);
   const decision = pick(data.decision, C.DECISIONS, 'una decisión', { field: 'decision' });
-  const justification = str(data, 'justification', { required: true, min: 10, max: 5000, label: 'Justificación de la decisión' });
-  const base = { n: r.decisions.length + 1, kind: 'Autorización', decision, justification, conditions: [], decidedBy: user.name, decidedById: user.id, at: now(), itilType: r.evaluation?.itilType || '', evaluationSnapshot: r.evaluation ? { ...r.evaluation } : null };
+  // El motivo solo es obligatorio al rechazar o pedir información: el solicitante necesita saber por qué o qué falta.
+  const needsReason = ['Rechazado', 'Más información'].includes(decision);
+  const justification = str(data, 'justification', { required: needsReason, min: needsReason ? 10 : 0, max: 5000, label: decision === 'Más información' ? 'Información que falta' : 'Motivo' });
+  const feasibility = pick(data.feasibility, C.FEASIBILITY, 'la viabilidad técnica', { required: decision.startsWith('Aprobado'), field: 'feasibility' });
+  if (feasibility && r.evaluation) r.evaluation.feasibility = feasibility;
+  const base = { n: r.decisions.length + 1, kind: 'Autorización', decision, justification, feasibility, conditions: [], decidedBy: user.name, decidedById: user.id, at: now(), itilType: r.evaluation?.itilType || '', evaluationSnapshot: r.evaluation ? { ...r.evaluation } : null };
   if (decision === 'Más información') {
     requireState(r, ['En validación', 'En análisis', 'En planificación', 'Pendiente de aprobación']);
     requestInfo(db, r, user, justification, base);
@@ -346,8 +335,8 @@ function decisionAction(db, r, number, user, data) {
   const e = r.evaluation || {};
   const missing = [...missingAnalysis(e), ...missingPlanning(e)];
   if (missing.length) fail(409, `No se puede aprobar: falta ${missing.join('; ')}.`);
-  // Un cambio marcado como no viable no se aprueba: se corrige el análisis o se rechaza.
-  if (e.feasibility === 'No viable') fail(409, 'No se puede aprobar un cambio con viabilidad técnica «No viable». Corrige el análisis (sección B) o rechaza la solicitud.', 'decision');
+  // Un cambio no viable no se aprueba: se rechaza.
+  if (feasibility === 'No viable') fail(409, 'No se puede aprobar un cambio con viabilidad técnica «No viable»: recházalo.', 'feasibility');
   if (decision === 'Aprobado con condiciones') {
     base.conditions = parseConditions(data);
     if (!base.conditions.length) fail(400, 'Una aprobación condicionada requiere al menos una condición con su forma de verificación.');
@@ -356,7 +345,7 @@ function decisionAction(db, r, number, user, data) {
   base.authorizedModules = (e.affectedModules || []).map(x => ({ ...x }));
   r.decisions.push(base);
   notify(r, `Solicitud ${decision === 'Aprobado' ? 'aprobada' : 'aprobada con condiciones'} por el CCC. La aprobación no implica que el cambio ya esté implementado.`);
-  transition(db, r, user, C.DECISION_STATUS[decision], decision === 'Aprobado' ? 'Aprobación' : 'Aprobación condicionada', `${justification}${base.conditions.length ? ` · Condiciones: ${base.conditions.map(c => c.text).join(' | ')}` : ''} · Módulos autorizados: ${base.authorizedModules.map(x => x.module).join(', ')}`);
+  transition(db, r, user, C.DECISION_STATUS[decision], decision === 'Aprobado' ? 'Aprobación' : 'Aprobación condicionada', `Viabilidad: ${feasibility}.${justification ? ` ${justification}` : ''}${base.conditions.length ? ` · Condiciones: ${base.conditions.map(c => c.text).join(' | ')}` : ''} · Módulos autorizados: ${base.authorizedModules.map(x => x.module).join(', ')}`);
 }
 function supersede(db, r, number, user, reason) {
   const auth = currentAuthorization(r);
@@ -378,7 +367,7 @@ function assignAction(db, r, number, user, data) {
   const previous = currentAssignment(r);
   if (previous?.developerId === dev.id) fail(409, `${dev.name} ya es el responsable asignado.`);
   const reason = previous ? str(data, 'reason', { required: true, min: 10, max: 2000, label: 'Motivo de la reasignación' }) : str(data, 'reason', { max: 2000 });
-  const assignment = { n: r.assignments.length + 1, developerId: dev.id, developerName: dev.name, assignedBy: user.name, assignedById: user.id, at: now(), targetDate: isoDate(str(data, 'targetDate', { max: 10 }), 'Fecha objetivo', localDate()), notes: str(data, 'notes', { max: 3000, label: 'Observaciones de implementación' }), priority: pick(data.priority || r.priority || 'Media', C.LEVELS, 'una prioridad', { field: 'priority' }), decisionN: auth.n, reason, previous: previous ? previous.developerName : null };
+  const assignment = { n: r.assignments.length + 1, developerId: dev.id, developerName: dev.name, assignedBy: user.name, assignedById: user.id, at: now(), targetDate: isoDate(str(data, 'targetDate', { max: 10 }), 'Fecha límite', localDate(), 'targetDate') || r.evaluation?.deadline || '', notes: str(data, 'notes', { max: 3000, label: 'Observaciones de implementación' }), priority: pick(data.priority || r.priority || 'Media', C.LEVELS, 'una prioridad', { field: 'priority' }), decisionN: auth.n, reason, previous: previous ? previous.developerName : null };
   if (previous) Object.assign(previous, { releasedAt: assignment.at, releasedReason: reason });
   if (assignment.priority !== r.priority) { audit(db, { entityType: 'CRF', entityId: r.id, action: 'Cambio de prioridad', actor: user, field: 'priority', oldValue: r.priority, newValue: assignment.priority }); r.priority = assignment.priority; }
   r.assignments.push(assignment);
@@ -400,9 +389,9 @@ function activityAction(db, r, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación']);
   const round = currentRound(r);
-  const activity = { id: `ACT-${r.implementation.rounds.reduce((n, x) => n + x.activities.length, 0) + 1}`, date: isoDate(str(data, 'date', { max: 10 }), 'Fecha de la actividad') || localDate(), description: str(data, 'description', { required: true, min: 5, max: 3000, label: 'Descripción de la actividad' }), hours: num(data, 'hours', { required: true, label: 'Tiempo utilizado (horas)', max: 1000 }), status: pick(data.status || 'Completada', C.ACTIVITY_STATES, 'un estado de actividad', { field: 'status' }), observations: str(data, 'observations', { max: 2000 }), evidence: str(data, 'evidence', { max: 1000 }), by: user.name, at: now() };
+  const activity = { id: `ACT-${r.implementation.rounds.reduce((n, x) => n + x.activities.length, 0) + 1}`, date: isoDate(str(data, 'date', { max: 10 }), 'Fecha de la actividad') || localDate(), description: str(data, 'description', { required: true, min: 5, max: 3000, label: 'Descripción de la actividad' }), hours: num(data, 'hours', { label: 'Tiempo utilizado (horas)', max: 1000 }), status: pick(data.status || 'Completada', C.ACTIVITY_STATES, 'un estado de actividad', { field: 'status' }), observations: str(data, 'observations', { max: 2000 }), evidence: str(data, 'evidence', { max: 1000 }), by: user.name, at: now() };
   round.activities.push(activity);
-  log(db, r, user, 'Registro de actividad', `${activity.id}: ${activity.description} (${activity.hours} h, ${activity.status}).`);
+  log(db, r, user, 'Registro de actividad', `${activity.id}: ${activity.description} (${activity.status}).`);
 }
 function gitAction(db, r, user, data) {
   requireAssignee(r, user);
@@ -411,7 +400,7 @@ function gitAction(db, r, user, data) {
   const v = data[GITHUB_RESULT] || null;
   const ref = { id: nextId(r.gitRefs, 'GIT'), kind, value, url: url || v?.details?.url || '', note: str(data, 'note', { max: 1000 }), by: user.name, at: now(), verified: v?.ok === true, verification: v };
   r.gitRefs.push(ref);
-  log(db, r, user, 'Registro de evidencia', `${kind}: ${value}${ref.url ? ` (${ref.url})` : ''}. ${ref.verified ? `Verificado en GitHub${v.details?.state ? ` (${v.details.state})` : ''}.` : v?.message || 'Sin verificación en GitHub.'}`);
+  log(db, r, user, 'Registro de referencia Git', `${kind}: ${value}${ref.url ? ` (${ref.url})` : ''}. ${ref.verified ? `Verificado en GitHub${v.details?.state ? ` (${v.details.state})` : ''}.` : v?.message || 'Sin verificación en GitHub.'}`);
 }
 // Validación de la referencia antes de consultarla en GitHub (también la usa el servidor).
 function gitInput(data) {
@@ -435,18 +424,17 @@ function gitRefreshAction(db, r, user, data) {
   if (ref.kind === 'Pull request' && r.pullRequest && `#${r.pullRequest.number}` === ref.value && v.details) Object.assign(r.pullRequest, { state: v.details.state || r.pullRequest.state, verified: v.ok === true, verification: v });
   log(db, r, user, 'Verificación de referencia', `${ref.id} ${ref.kind} ${ref.value}: ${v.ok ? `verificada${v.details?.state ? ` (${v.details.state})` : ''}` : v.message}.`, { field: ref.id, oldValue: before, newValue: v.details?.state || v.status });
 }
-// Formato de la rama: identificador-titulo-descripcionCorta (p. ej. CRF-000001-cancelar-boletos-liberar-asiento).
+// La rama se configura según el tipo de cambio: hotfix/ para emergencias, feature/ para normales y estándar.
+// El desarrollador solo escribe el nombre; el sistema antepone el prefijo y el código del CRF.
 const slug = v => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-function branchName(r, shortDescription) {
-  const title = slug(r.title).split('-').slice(0, 6).join('-'), short = slug(shortDescription).split('-').slice(0, 6).join('-');
-  return `${r.id}-${title}-${short}`.replace(/-+/g, '-').slice(0, 100).replace(/-+$/, '');
-}
+const branchPrefix = r => `${C.BRANCH_PREFIX[r.evaluation?.itilType] || 'feature'}/${r.id}-`;
 function branchInput(r, data) {
-  const shortDescription = str(data, 'shortDescription', { required: true, min: 3, max: 60, label: 'Descripción corta' });
-  if (slug(shortDescription).length < 3) fail(400, 'Descripción corta: usa letras o números.', 'shortDescription');
-  const base = str(data, 'base', { max: 100, label: 'Rama base' }) || 'main';
+  const label = str(data, 'name', { required: true, min: 3, max: 60, label: 'Nombre de la rama' });
+  const part = slug(label).slice(0, 60).replace(/-+$/, '');
+  if (part.length < 3) fail(400, 'Nombre de la rama: usa letras o números.', 'name');
+  const base = str(data, 'base', { max: 100 }) || 'main';
   if (!/^[\w.\/-]{1,100}$/.test(base)) fail(400, 'Rama base: nombre inválido.', 'base');
-  return { name: branchName(r, shortDescription), base, shortDescription, create: bool(data.create) };
+  return { name: `${branchPrefix(r)}${part}`, base, label: part, create: bool(data.create) };
 }
 function branchAction(db, r, user, data) {
   requireAssignee(r, user);
@@ -454,7 +442,7 @@ function branchAction(db, r, user, data) {
   if (r.pullRequest && r.pullRequest.state !== 'cerrado sin fusionar') fail(409, 'La rama ya tiene un pull request; no puede reemplazarse.');
   const input = branchInput(r, data), v = data[GITHUB_RESULT] || null;
   const previous = r.workBranch?.name || null;
-  r.workBranch = { name: input.name, base: input.base, shortDescription: input.shortDescription, created: !!v?.created, verified: v?.ok === true, verification: v, by: user.name, at: now() };
+  r.workBranch = { name: input.name, base: input.base, label: input.label, type: r.evaluation?.itilType || '', created: !!v?.created, verified: v?.ok === true, verification: v, by: user.name, at: now() };
   r.gitRefs.push({ id: nextId(r.gitRefs, 'GIT'), kind: 'Rama', value: input.name, url: v?.details?.url || '', note: `Rama de trabajo (base ${input.base})`, by: user.name, at: now(), verified: v?.ok === true, verification: v });
   log(db, r, user, 'Rama de trabajo', `${v?.created ? 'Creada en GitHub' : 'Registrada'}: ${input.name} (desde ${input.base}). ${v?.ok ? 'Verificada en GitHub.' : v?.message || 'Sin verificación en GitHub.'}`, { field: 'rama', oldValue: previous, newValue: input.name });
 }
@@ -470,7 +458,7 @@ function pullRequestAction(db, r, user, data) {
   if (head !== r.workBranch.name) fail(400, `El PR #${number} sale de la rama «${head}», pero la rama de trabajo es «${r.workBranch.name}».`, 'number');
   r.pullRequest = { number, url: d.url || '', title: d.title || '', head, base, state: d.state || 'sin verificar', created: !!v?.created, verified: v?.ok === true, verification: v, by: user.name, at: now() };
   r.gitRefs.push({ id: nextId(r.gitRefs, 'GIT'), kind: 'Pull request', value: `#${number}`, url: d.url || '', note: `${head} → ${base}`, by: user.name, at: now(), verified: v?.ok === true, verification: v });
-  log(db, r, user, 'Pull request', `${v?.created ? 'Creado en GitHub' : 'Registrado'}: #${number} de ${head} a ${base}${d.state ? ` (${d.state})` : ''}. ${v?.ok ? 'Verificado en GitHub.' : v?.message || 'Sin verificación en GitHub.'}`);
+  log(db, r, user, 'Pull request', `${v?.created ? 'Creado en GitHub' : 'Registrado'}: #${number} de ${head} a ${base}${d.state ? ` (${d.state})` : ''}. ${v?.ok ? 'Verificado en GitHub.' : v?.message || 'Sin verificación en GitHub.'}`, { field: 'pull request', newValue: `#${number} ${head} → ${base}` });
 }
 function moduleChangeAction(db, r, user, data) {
   requireAssignee(r, user);
@@ -663,7 +651,7 @@ function mutate(db, id, action, user, data) {
     case 'validate':
       requireCCC(r, user); requireState(r, ['En validación']);
       Object.assign(r.validation ||= {}, { validatedBy: user.name, validatedAt: now(), note: str(data, 'note', { max: 2000 }) });
-      r.evaluation = { ...(r.evaluation || {}), member: user.name, memberId: user.id, startedAt: r.evaluation?.startedAt || now(), testCriteria: r.evaluation?.testCriteria?.length ? r.evaluation.testCriteria : [...(r.acceptanceCriteria || [])] };
+      r.evaluation = { ...(r.evaluation || {}), member: user.name, memberId: user.id, startedAt: r.evaluation?.startedAt || now() };
       transition(db, r, user, 'En análisis', 'Inicio del análisis', r.validation.note || 'Solicitud completa; comienza el análisis del CCC.');
       break;
     case 'request-info':
@@ -804,4 +792,4 @@ function attachmentFor(db, attachmentId, user) {
 }
 function users(db) { return db.prepare("SELECT id,name,email,role FROM users WHERE active=1 AND role IN ('experto','ccc') ORDER BY name").all(); }
 
-module.exports = { preflight, branchInput, slug, HttpError, fail, str, pick, list, num, link, isoDate, bool, now, isCCC, isDev, parseCode, canView, snapshot, createRequest, mutate, uploadAttachments, trackRequest, publicClarification, requestDetail, attachmentFor, users, allVisible, modulesOf, authorizedModules, currentAuthorization, currentAssignment, reviewCriteria, gitInput, findGitRef, recordIssue, issueData, GITHUB_RESULT, EVAL_TEXT, EVAL_LIST, EVAL_NUM };
+module.exports = { preflight, branchInput, branchPrefix, slug, HttpError, fail, str, pick, list, num, link, isoDate, bool, now, isCCC, isDev, parseCode, canView, snapshot, createRequest, mutate, uploadAttachments, trackRequest, publicClarification, requestDetail, attachmentFor, users, allVisible, modulesOf, authorizedModules, currentAuthorization, currentAssignment, reviewCriteria, gitInput, findGitRef, recordIssue, issueData, GITHUB_RESULT, EVAL_TEXT, EVAL_LIST, EVAL_NUM };

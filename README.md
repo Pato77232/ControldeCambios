@@ -53,6 +53,22 @@ npm run accounts:sync
 - `npm run start:demo`: inicia el servidor sobre la base de demostración.
 - `npm run accounts:sync`: aplica el equipo de cinco cuentas a una base existente con la contraseña de `.env`, revoca las sesiones y desactiva cuentas antiguas.
 
+## Ejecución con Docker
+
+Requisitos: Docker Desktop (o Docker Engine con Compose) y un archivo `.env` como el de la instalación (`SEED_PASSWORD` y, si usan GitHub, `GITHUB_REPO`, `GITHUB_TOKEN` y `APP_URL`).
+
+```powershell
+docker compose up -d --build
+```
+
+Abre `http://127.0.0.1:3000`. Otros comandos: `docker compose logs -f control-cambios` para ver los registros y `docker compose down` para detener.
+
+- **Datos persistentes:** el contenedor guarda las bases SQLite y los adjuntos en la carpeta local `backend/data`, montada en `/data`. Detener, recrear o actualizar el contenedor no borra la información; para respaldarla, copia esa carpeta.
+- **Base de demostración:** para usar `demo.sqlite` (por ejemplo, con el CRF de la presentación), agrega `DEMO_MODE=true` en `.env` y vuelve a ejecutar `docker compose up -d`.
+- **Puerto:** cambia el puerto del equipo con `APP_PORT=8080` en `.env`.
+- **No ejecutes a la vez** `npm start` y el contenedor sobre la misma carpeta de datos.
+- La imagen no incluye `.env`, `backend/data`, las pruebas ni la documentación. Se ejecuta con el usuario sin privilegios `node` y con una comprobación de salud sobre `/api/catalog`.
+
 ## Roles y cuentas
 
 | Cuenta | Perfil |
@@ -72,9 +88,9 @@ Concentrar análisis y autorización en el CCC es una simplificación académica
 - **Ficha única del CCC** (secciones A–E): clasificación ITIL estándar/normal/emergencia, impacto técnico y funcional, riesgos, urgencia, prioridad (con una sugerencia orientativa), viabilidad, esfuerzo y duración, rollout, backout, plan de pruebas, inactividad, fecha y versión objetivo. Permite guardar borradores, y la decisión forma parte de la misma ficha.
 - **Decisiones coherentes:** aprobar exige un análisis y una planificación completos. Un cambio no viable no puede aprobarse: el sistema informa el error. Las condiciones incluyen su forma de verificación. «Más información» no es un rechazo. Las reevaluaciones conservan las decisiones anteriores.
 - **Módulos afectados:** el solicitante marca uno o varios módulos de BusesUTA en tarjetas seleccionables; el CCC los confirma con la operación prevista y la decisión autoriza esos módulos.
-- **Seguimiento paso a paso del desarrollador:** iniciar, rama de trabajo (`identificador-titulo-descripcionCorta`), desarrollo (actividades, módulos modificados, commits), pull request de la rama de trabajo hacia la base y envío a pruebas. Modificar un módulo no autorizado genera una desviación que el CCC debe decidir.
+- **Seguimiento paso a paso del desarrollador:** iniciar, rama de trabajo (el desarrollador escribe solo el nombre; el sistema antepone `feature/` o, en emergencias, `hotfix/` y el código del CRF), desarrollo (actividades, módulos modificados, commits), pull request de la rama de trabajo hacia la base y envío a pruebas. Modificar un módulo no autorizado genera una desviación que el CCC debe decidir.
 - **GitHub:** al aprobarse una solicitud se crea su issue, que se asigna al desarrollador, se comenta en cada hito y se cierra con el CRF. El sistema crea la rama de trabajo y el PR, o verifica los existentes. Ver [docs/github.md](docs/github.md).
-- **Planes de rollout y backout en Markdown** dentro de la ficha del CCC, con vista previa. El CRF técnico propone el tipo ITIL y la versión actual es opcional.
+- **Ficha del CCC reducida a lo indispensable:** tipo ITIL y módulos; impacto, urgencia, prioridad y riesgos; planes de rollout y backout en Markdown; fecha límite para el desarrollador; la viabilidad técnica se indica al decidir. El CRF técnico propone el tipo ITIL y la versión actual es opcional.
 - **Panel con filtros** por fechas, usuario, estado, módulo, tipo ITIL y prioridad, y **sección de auditoría** en cada expediente.
 - **Pruebas, revisión y cierre** en una sola sección del expediente. Las ejecuciones de prueba se conservan y las fallidas devuelven la solicitud a correcciones.
 - **Revisión postimplementación**, **backout ejecutado** (documentado, no simulado) y **cierre** exitoso, fallido o incompleto, separado del resultado de autorización y del administrativo. El CCC puede reabrir una solicitud cerrada.
@@ -143,6 +159,8 @@ backend/
   auth.cjs            Contraseñas, cuentas iniciales y sesiones
   configure-team.cjs  Sincronización del equipo
   demo.cjs            Base de demostración separada
+Dockerfile            Imagen de la aplicación
+docker-compose.yml    Servicio con la carpeta backend/data como volumen
 js/app.js             Cliente (pantallas por rol)
 css/styles.css        Estilos adaptables
 docs/proceso-acs.md   Documentación del proceso y del modelo

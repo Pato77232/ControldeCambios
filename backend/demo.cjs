@@ -9,7 +9,7 @@ const { openDatabase, transaction } = require('./database.cjs');
 const { seedUsers } = require('./auth.cjs');
 const S = require('./service.cjs');
 
-const DEMO = path.join(__dirname, 'data', 'demo.sqlite');
+const DEMO = process.env.DEMO_DB_PATH || path.join(__dirname, 'data', 'demo.sqlite');
 function buildDemo(db) {
   const u = id => db.prepare('SELECT id,name,email,role FROM users WHERE id=?').get(id);
   const david = u('team-david'), leslie = u('team-leslie'), edwin = u('team-edwin'), pablo = u('team-pablo'), shirley = u('team-shirley');
@@ -55,7 +55,7 @@ Respaldar las reservas antes de migrar.
 ## Responsable y verificación
 - Desarrollador asignado; comprobar una compra normal después de revertir`,
     testObjective: 'Verificar la cancelación y la liberación de asientos.', testTypes: 'Funcionales y de regresión.', testCriteria: ['El boleto se cancela antes de la salida', 'El asiento queda disponible'], testSuccess: 'Todas las pruebas superadas.', testEvidence: 'Capturas y registro de pruebas.',
-    downtimeValue: 0, downtimeUnit: 'minutos', plannedDate: '2026-12-01T22:00', targetVersion: '1.3.0', ...extra
+    deadline: '2026-12-20', ...extra
   });
   const base = { modules: ['Reservas y pasajeros', 'Boletos QR e historial'], currentBehavior: 'Una vez comprado, el boleto no puede cancelarse desde la aplicación.', featureMissing: true, result: 'Poder cancelar un boleto y liberar el asiento.' };
   const toApproval = (id, extra) => { act(id, 'receive', david); act(id, 'validate', david); act(id, 'evaluation', david, { ...plan(extra), step: 'planning' }); };
@@ -63,11 +63,11 @@ Respaldar las reservas antes de migrar.
   // Ejemplo 1: cancelación de boletos, de principio a fin.
   const e1 = tx(() => S.createRequest(db, null, { requesterType: 'usuario', name: 'María Usuaria (demostración)', email: 'maria.demo@example.com', title: 'Permitir la cancelación de boletos', description: 'Quiero poder cancelar un boleto comprado cuando no pueda viajar.', justification: 'Hoy debo acudir a la oficina de la cooperativa para cancelar.', ...base })).request.id;
   toApproval(e1);
-  act(e1, 'decision', david, { decision: 'Aprobado con condiciones', justification: 'Beneficio alto y riesgo controlado con el plan de backout.', conditions: [{ text: 'Respaldar la base antes de migrar', verification: 'Evidencia del respaldo adjunta en la revisión.' }] });
+  act(e1, 'decision', david, { feasibility: 'Viable', decision: 'Aprobado con condiciones', justification: 'Beneficio alto y riesgo controlado con el plan de backout.', conditions: [{ text: 'Respaldar la base antes de migrar', verification: 'Evidencia del respaldo adjunta en la revisión.' }] });
   act(e1, 'assign', david, { developerId: edwin.id, targetDate: '2026-12-05', notes: 'Seguir el rollout aprobado.' });
   act(e1, 'start', edwin, { conditionsAcknowledged: true });
   act(e1, 'activity', edwin, { description: 'Migración del esquema y lógica de cancelación', hours: 10, status: 'Completada' });
-  act(e1, 'branch', edwin, { shortDescription: 'liberar asiento', base: 'main' });
+  act(e1, 'branch', edwin, { name: 'liberar asiento', base: 'main' });
   act(e1, 'module-change', edwin, { module: 'Reservas y pasajeros', operation: 'Modificación', description: 'Nuevo caso de uso de cancelación.' });
   act(e1, 'module-change', edwin, { module: 'Boletos QR e historial', operation: 'Modificación', description: 'Estado «cancelado» en el historial de boletos.' });
   act(e1, 'pull-request', edwin, { number: 42, base: 'main' });
@@ -88,12 +88,12 @@ Respaldar las reservas antes de migrar.
   // Ejemplo 3: pruebas fallidas, correcciones y nueva ronda.
   const e3 = tx(() => S.createRequest(db, shirley, { requesterType: 'experto', modules: ['Buses y plantillas de asientos'], title: 'Marcar asientos preferenciales', currentBehavior: 'Todos los asientos se muestran iguales.', description: 'Distinguir visualmente los asientos preferenciales en el selector.', justification: 'Facilitar la compra a personas con discapacidad y adultos mayores.', result: 'Asientos preferenciales identificados.', proposedItilType: 'Estándar', modificationType: 'Modificación', environment: 'Pruebas', currentVersion: '2.0.1', targetVersion: '2.1.0', acceptanceCriteria: ['Los asientos preferenciales tienen un icono distinto'] })).request.id;
   toApproval(e3, { affectedModules: [{ module: 'Buses y plantillas de asientos', operation: 'Modificación' }], impact: 'Bajo', priority: 'Media', targetVersion: '2.1.0', testCriteria: ['Los asientos preferenciales tienen un icono distinto'] });
-  act(e3, 'decision', david, { decision: 'Aprobado', justification: 'Cambio acotado con beneficio de accesibilidad.' });
+  act(e3, 'decision', david, { feasibility: 'Viable', decision: 'Aprobado', justification: 'Cambio acotado con beneficio de accesibilidad.' });
   act(e3, 'assign', david, { developerId: shirley.id });
   act(e3, 'start', shirley);
   act(e3, 'activity', shirley, { description: 'Nuevo icono y leyenda', hours: 4 });
   act(e3, 'module-change', shirley, { module: 'Buses y plantillas de asientos', operation: 'Modificación', description: 'Icono de asiento preferencial.' });
-  act(e3, 'branch', shirley, { shortDescription: 'icono preferencial', base: 'main' });
+  act(e3, 'branch', shirley, { name: 'icono preferencial', base: 'main' });
   act(e3, 'pull-request', shirley, { number: 57, base: 'main' });
   act(e3, 'send-to-tests', shirley);
   act(e3, 'test', leslie, { name: 'Icono preferencial visible', expected: 'Icono distinto', obtained: 'El icono no aparece en móviles', status: 'Fallida' });

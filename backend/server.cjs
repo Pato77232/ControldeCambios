@@ -33,8 +33,8 @@ function limiter(max, windowMs) {
   };
 }
 function catalog() {
-  const { PROJECT, MODULES, STATES, ITIL, IMPACT, LEVELS, FEASIBILITY, DECISIONS, OPERATIONS, ENVIRONMENTS, DOWNTIME_UNITS, ACTIVITY_STATES, GIT_KINDS, TEST_STATES, TEST_OUTCOMES, ROLLOUT_COMPLIANCE, REVIEW_DECISIONS, BACKOUT_RESULTS, CLOSURE_RESULTS, STAGES, ATTACHMENT_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_FILES } = C;
-  return { PROJECT, MODULES, STATES, ITIL, IMPACT, LEVELS, FEASIBILITY, DECISIONS, OPERATIONS, ENVIRONMENTS, DOWNTIME_UNITS, ACTIVITY_STATES, GIT_KINDS, TEST_STATES, TEST_OUTCOMES, ROLLOUT_COMPLIANCE, REVIEW_DECISIONS, BACKOUT_RESULTS, CLOSURE_RESULTS, STAGES, EXTENSIONS: Object.keys(ATTACHMENT_TYPES), ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_FILES };
+  const { PROJECT, MODULES, STATES, ITIL, IMPACT, LEVELS, FEASIBILITY, DECISIONS, OPERATIONS, ENVIRONMENTS, DOWNTIME_UNITS, ACTIVITY_STATES, GIT_KINDS, TEST_STATES, TEST_OUTCOMES, ROLLOUT_COMPLIANCE, REVIEW_DECISIONS, BACKOUT_RESULTS, CLOSURE_RESULTS, STAGES, BRANCH_PREFIX, ATTACHMENT_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_FILES } = C;
+  return { PROJECT, MODULES, STATES, ITIL, IMPACT, LEVELS, FEASIBILITY, DECISIONS, OPERATIONS, ENVIRONMENTS, DOWNTIME_UNITS, ACTIVITY_STATES, GIT_KINDS, TEST_STATES, TEST_OUTCOMES, ROLLOUT_COMPLIANCE, REVIEW_DECISIONS, BACKOUT_RESULTS, CLOSURE_RESULTS, STAGES, BRANCH_PREFIX, EXTENSIONS: Object.keys(ATTACHMENT_TYPES), ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_FILES };
 }
 // Descripción del pull request: enlaza la issue y resume lo autorizado (sin datos personales del solicitante).
 function pullBody(r) {
@@ -166,10 +166,13 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
             data[S.GITHUB_RESULT] = await github.verify(ref.kind, ref.value, ref.url);
           } else if (name === 'branch') {
             // Permisos y estado se comprueban antes de crear nada en GitHub.
+            const status = github.configured ? await github.status() : null;
+            data.base = status?.defaultBranch || 'main';
+            data.create = github.canIssue();
             const current = S.preflight(db, id, user, name, data), input = S.branchInput(current, data);
             const result = input.create ? await github.createBranch(input.name, input.base) : await github.verify('Rama', input.name);
-            if (input.create && !result.ok) fail(result.status === 'sin configurar' ? 409 : 400, result.message, result.field || 'create');
-            if (!input.create && result.status === 'no encontrada') fail(400, `La rama «${input.name}» no existe en ${github.repo}. Créala con ese nombre o marca «Crear la rama en GitHub».`, 'shortDescription');
+            if (input.create && !result.ok) fail(result.status === 'sin configurar' ? 409 : 400, result.message, 'name');
+            if (!input.create && result.status === 'no encontrada') fail(400, `La rama «${input.name}» no existe en ${github.repo}. Créala con ese nombre (el token no permite crearla).`, 'name');
             data[S.GITHUB_RESULT] = result;
           } else if (name === 'pull-request') {
             const current = S.preflight(db, id, user, name, data);
@@ -225,7 +228,7 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
 if (require.main === module) {
   try {
     // --demo: usa la base de demostración separada (npm run demo:reset la crea).
-    if (process.argv.includes('--demo')) process.env.DB_PATH = require('./demo.cjs').DEMO;
+    if (process.argv.includes('--demo') || process.env.DEMO_MODE === 'true') process.env.DB_PATH = require('./demo.cjs').DEMO;
     const { server } = createApp();
     const port = Number(process.env.PORT || 3000), host = process.env.HOST || '127.0.0.1';
     server.on('error', error => { console.error(`No se pudo iniciar el servidor: ${error.code}. Revisa HOST y PORT en .env.`); process.exitCode = 1; server.close(); });

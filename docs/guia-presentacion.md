@@ -27,7 +27,7 @@ Recorrido completo de un cambio pedido por el ingeniero, desde la solicitud hast
 
 En **Solicitudes**, abre **CRF-000006** y muestra lo que Leslie registró:
 
-- Cinco módulos afectados.
+- Cinco módulos afectados (es un cambio sobre algo existente).
 - Tipo ITIL propuesto *Normal*.
 - Reglas de negocio (cédula, correo, fechas, precios).
 - Cuatro criterios de aceptación.
@@ -41,21 +41,15 @@ Está en *Registrada*: todavía no tiene issue en GitHub.
 
 ## 3. Ficha del CCC (David)
 
-Pulsa **Ficha del CCC**.
+Pulsa **Ficha del CCC**. Solo tiene lo indispensable.
 
 **A. Clasificación**
 - *Normal* ya viene preseleccionado (lo propuso Leslie).
-- Justificación: «Cambio funcional transversal que requiere evaluación y planificación ordinaria.»
-- Módulos: ya vienen marcados; revisa la operación (*Modificación*).
-- Modificaciones previstas: «Validadores en cliente y servidor para los formularios de los cinco módulos.»
+- Los módulos ya vienen marcados; revisa la operación (*Modificación*).
 
-**B. Impacto**
+**B. Impacto y riesgos**
 - Impacto *Medio*, urgencia *Alta*, prioridad *Alta* (mira la sugerencia orientativa).
-- Impacto técnico: «Formularios y validadores del backend de cinco módulos.»
-- Impacto funcional: «Los usuarios verán errores en rojo antes de enviar.»
 - Riesgos (uno por línea): «Rechazar datos válidos por reglas demasiado estrictas» y «Mensajes inconsistentes entre módulos».
-- Viabilidad *Viable* y su justificación.
-- Esfuerzo 24 horas, duración 5 días y recursos.
 
 Pulsa **Completar análisis**.
 
@@ -68,7 +62,7 @@ Plan de rollout:
 Validar todos los formularios de BusesUTA sin afectar a los usuarios actuales.
 
 ## Actividades (en orden)
-1. Crear la rama de trabajo desde main
+1. Crear la rama de trabajo
 2. Validadores comunes (cédula, correo, teléfono, placa, fechas, montos)
 3. Aplicarlos en los formularios de cada módulo
 4. Validación equivalente en el backend
@@ -92,24 +86,18 @@ Plan de backout:
 - Registro, reserva y pago funcionan como antes
 ```
 
-Completa también:
-- Plan de pruebas: los criterios ya vienen del CRF.
-- Inactividad *0 minutos*.
-- Una fecha prevista.
-- Versión objetivo *Pendiente*.
-
-Pulsa **Completar análisis y planificación**.
+Elige la **fecha límite de implementación**: la fecha en que el desarrollador debe terminar. Pulsa **Completar análisis y planificación**.
 
 **D. Decisión**
-- *(Opcional)* Para mostrar que un cambio no viable no se aprueba: marca la viabilidad como *No viable* y elige «Aprobado». Aparece el error en rojo. Vuelve a ponerlo como *Viable*.
-- Elige **Aprobado con condiciones**.
-  - Condición: `Probar los formularios de compra con datos reales | Capturas de cada formulario mostrando los errores en rojo`
-  - Justificación: «Mejora necesaria y de riesgo controlado.»
+- Elige **Aprobado con condiciones** y marca la **viabilidad técnica**: *Viable*.
+  - *(Opcional)* Para mostrar que un cambio no viable no se aprueba: marca *No viable*. Aparece el error en rojo y el botón se desactiva. Vuelve a *Viable*.
+- Condición: `Probar los formularios de compra con datos reales | Capturas de cada formulario mostrando los errores en rojo`
+- Al aprobar no hace falta justificación. Solo se pide un **motivo** al rechazar o al pedir más información.
 - Registra la decisión. **En ese momento se crea la issue en ProyectoBusesUTA**: muéstrala en GitHub con su etiqueta `estado: aprobada`.
 
 ## 4. Asignación (David)
 
-En el expediente, **Asignar implementación** a **Edwin**, con una fecha objetivo.
+En el expediente, **Asignar implementación** a **Edwin**. La fecha límite es la que pusiste en la ficha.
 
 En GitHub, la issue queda asignada a **Pato77232** y recibe un comentario.
 
@@ -117,11 +105,8 @@ En GitHub, la issue queda asignada a **Pato77232** y recibe un comentario.
 
 En **Mis tareas** pulsa «Iniciar implementación»: se abre **Seguimiento · CRF-000006**.
 
-1. **Iniciar.** Muestra los planes aprobados y la condición. Marca «Leí las condiciones» e inicia.
-2. **Rama de trabajo.**
-   - Descripción corta: `validar formularios`.
-   - El nombre aparece en vivo: `CRF-000006-validacion-del-ingreso-de-informacion-en-validar-formularios`.
-   - Deja marcada **Crear la rama en GitHub** y regístrala. La rama aparece en ProyectoBusesUTA.
+1. **Iniciar.** Muestra los planes aprobados, la condición y la fecha límite. Marca «Leí las condiciones» e inicia.
+2. **Rama de trabajo.** Como es un cambio *Normal*, el prefijo ya viene configurado: `feature/CRF-000006-` (en una emergencia sería `hotfix/`). Escribe solo el nombre, `validar-formularios`, y regístrala. Se crea `feature/CRF-000006-validar-formularios` en ProyectoBusesUTA, desde la rama principal.
 3. **Desarrollo.**
    - En tu clon de ProyectoBusesUTA, sube al menos un commit a esa rama; GitHub no permite un PR sin cambios:
 
@@ -130,16 +115,16 @@ En **Mis tareas** pulsa «Iniciar implementación»: se abre **Seguimiento · CR
      ```
 
      ```powershell
-     git switch CRF-000006-validacion-del-ingreso-de-informacion-en-validar-formularios
+     git switch feature/CRF-000006-validar-formularios
      ```
 
      Haz el cambio, luego `git commit` y `git push`.
    - En el sistema registra:
-     - una **actividad** (horas trabajadas);
+     - una **actividad**;
      - el **módulo modificado** (por ejemplo «Autenticación y usuarios»);
      - el **commit** (su SHA), que se verifica en GitHub.
    - *(Opcional)* Registra un módulo **no autorizado** (por ejemplo «Notificaciones») para mostrar la **desviación de alcance**. David debe autorizarla o rechazarla en el expediente antes de continuar.
-4. **Pull request.** «Crear en GitHub» abre el PR de la rama de trabajo → `main`, con `Refs #N` a la issue. Se ve claramente de qué rama a qué rama va.
+4. **Pull request.** «Crear en GitHub» abre el PR de la rama de trabajo hacia la rama principal, con `Refs #N` a la issue. Se ve claramente de qué rama a qué rama va.
 5. **Enviar a pruebas.** La lista de verificación debe estar en verde.
 
 ## 6. Pruebas (Pablo)
@@ -171,7 +156,8 @@ El CRF queda *Cerrado* y **la issue se cierra sola en GitHub** como completada.
 
 ## 9. Para terminar la presentación
 
-- **Expediente → Auditoría:** cada evento con quién, cuándo, estado anterior y nuevo, y cada campo modificado.
+- **Expediente → Auditoría:** primero la tabla **Cambios y ramas registrados** (rama, PR, commits y módulos modificados, con su verificación en GitHub) y después cada evento con quién, cuándo, estado anterior y nuevo, y cada campo modificado.
+- **Menú Auditoría:** filtra por «Rama de trabajo», «Pull request» o «Registro de módulo modificado», o por el código CRF-000006.
 - **Expediente → Historial:** los hitos del cambio.
 - **Panel:** filtra por usuario *Edwin* y prioridad *Alta*.
 - **Reportes:** exporta el CSV.

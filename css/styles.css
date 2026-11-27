@@ -1375,3 +1375,8 @@ input[aria-invalid=true],select[aria-invalid=true],textarea[aria-invalid=true],.
 .checklist li.ok{color:#1d6f54}
 .checklist svg{width:16px;height:16px}
 @media(max-width:750px){.stepper li{min-width:150px}}
+.branch-input{display:flex;align-items:stretch;border:1px solid #d3dce7;border-radius:6px;overflow:hidden;background:#fff}
+.branch-prefix{display:flex;align-items:center;padding:0 10px;background:#0f1f33;color:#9fd8ff;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;white-space:nowrap}
+.branch-input input{border:0!important;flex:1;min-width:0;font-family:ui-monospace,Consolas,monospace}
+.branch-input:has(input[aria-invalid=true]){border-color:#d33d58;box-shadow:0 0 0 3px #fbe1e6}
+@media(max-width:600px){.branch-input{flex-direction:column}.branch-prefix{padding:6px 10px}}
