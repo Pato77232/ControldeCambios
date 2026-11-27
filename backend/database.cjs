@@ -7,7 +7,9 @@ const { migrateDocument } = require('./migrate.cjs');
 function openDatabase(filename) {
   if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true });
   const db = new DatabaseSync(filename);
-  db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
+  // WAL por defecto; DELETE en Docker cuando la carpeta de datos está montada desde Windows o macOS.
+  const journal = process.env.SQLITE_JOURNAL_MODE === 'DELETE' ? 'DELETE' : 'WAL';
+  db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=${journal};
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT NOT NULL,email TEXT NOT NULL UNIQUE,role TEXT NOT NULL CHECK(role IN ('usuario','experto','ccc')),password_hash TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),csrf TEXT NOT NULL,expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS requests(id INTEGER PRIMARY KEY AUTOINCREMENT,owner_id TEXT REFERENCES users(id),document TEXT NOT NULL);`);
