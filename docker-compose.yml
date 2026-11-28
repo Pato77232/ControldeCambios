@@ -1,0 +1,25 @@
+# Uso: docker compose up -d --build   ·   Detener: docker compose down
+# Los datos se guardan en la carpeta local ./backend/data (bases SQLite y adjuntos):
+# no se pierden al detener, recrear o actualizar el contenedor.
+services:
+  control-cambios:
+    build: .
+    image: control-cambios-busesuta
+    container_name: control-cambios
+    # SEED_PASSWORD, GITHUB_REPO, GITHUB_TOKEN, APP_URL… se leen de .env (no se copian a la imagen).
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      DB_PATH: /data/changeflow.sqlite
+      DEMO_DB_PATH: /data/demo.sqlite
+      # true: usa la base de demostración (demo.sqlite) en lugar de la real.
+      DEMO_MODE: ${DEMO_MODE:-false}
+      # Modo de diario compatible con carpetas montadas desde Windows o macOS.
+      SQLITE_JOURNAL_MODE: DELETE
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - ./backend/data:/data
+    restart: unless-stopped
