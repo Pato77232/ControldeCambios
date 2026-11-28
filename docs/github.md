@@ -5,6 +5,8 @@ Con esta integración, el Sistema de Control de Cambios trabaja con el repositor
 - **Cuando el CCC aprueba una solicitud de cambio (CRF) se crea su issue** en GitHub, con el código `[CRF-000001]`, los módulos afectados, la descripción y los criterios de aceptación como lista de tareas. Las solicitudes rechazadas o en evaluación no generan issues.
 - **La issue se asigna sola** al desarrollador que el CCC elige, usando su usuario de GitHub, y cambia si hay una reasignación.
 - **Rama de trabajo por cambio.** El desarrollador la crea desde el sistema con el formato `identificador-titulo-descripcionCorta` (por ejemplo `CRF-000001-cancelar-boletos-liberar-asiento`), a partir de la rama base acordada.
+- **Hotfix con versión.** En un cambio de emergencia el CCC fija la versión (por ejemplo `v1.2.1`) y el desarrollador la publica como tag desde el commit de fusión del PR (o desde la punta de la rama si aún no se fusionó).
+- **Commits leídos de GitHub.** Cuando el cambio tiene issue, los commits no se registran a mano: el seguimiento y la auditoría los leen de la rama de trabajo comparándola con la base.
 - **Pull request al terminar.** El sistema crea el PR de la rama de trabajo hacia la base, o verifica uno existente y comprueba de qué rama a qué rama va.
 - **La issue sigue el flujo del CRF.** En cada hito (asignación, inicio de implementación, rama, PR, pruebas, revisión, cierre) la issue recibe un comentario y cambia su etiqueta `estado: …`. Al cerrar el CRF, la issue se cierra: como *completada* si el resultado fue exitoso y como *no planificada* en los demás casos.
 - **Las referencias de Git se verifican de verdad.** Cuando el desarrollador registra una rama, un commit, un pull request o un tag, el sistema consulta GitHub. Si no existe, no se registra. Si existe, guarda su estado; por ejemplo, un PR «abierto» o «fusionado». El botón **Verificar** vuelve a consultarlo más tarde.
@@ -22,7 +24,7 @@ Necesitas el nombre en formato `propietario/repositorio`, por ejemplo `uta-softw
 3. **Repository access:** *Only select repositories* → elige solo el repositorio de BusesUTA.
 4. **Permissions → Repository permissions:**
    - **Issues:** *Read and write* (para crear y actualizar las issues).
-   - **Contents:** *Read and write* (para crear la rama de trabajo y verificar ramas, commits y tags).
+   - **Contents:** *Read and write* (para crear la rama de trabajo y los tags de versión, y leer commits, ramas y tags).
    - **Pull requests:** *Read and write* (para crear el PR y consultar su estado).
 
    Si ya creaste el token con permisos de solo lectura, edítalo en GitHub y cambia esos dos permisos: no hace falta generar uno nuevo.

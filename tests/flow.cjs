@@ -61,7 +61,9 @@ function dom() {
         assert.match(await show('#ics'), /Mis tareas/, 'las rutas de ICS vuelven al panel');
         const rep = await show('#reportes');
         assert.match(rep, /Por tipo ITIL/); assert.match(rep, /Exportar CSV/);
-        assert.match(await show('#auditoria'), /Eventos persistentes/);
+        const audit = await show('#auditoria');
+        assert.match(audit, /Cambios realizados por integrante/); assert.match(audit, /class="donut"/); assert.match(audit, /Solicitudes y cambios realizados por tipo/); assert.match(audit, /Eventos de auditoría/);
+        assert.match(await show('#auditoria?developer=team-edwin'), /Edwin<\/strong> realizó/);
         const fichaHtml = await show('#ficha/CRF-000002');
         assert.match(fichaHtml, /Esta ficha|Ficha del CCC/); assert.match(fichaHtml, /md-field/); assert.match(fichaHtml, /Vista previa/);
         const panel = await show('#panel?priority=Alta');

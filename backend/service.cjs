@@ -204,7 +204,7 @@ function createRequest(db, user, data) {
 // Ficha mínima: clasificación y módulos (A), impacto y riesgos (B), planes y fecha límite (C).
 const EVAL_TEXT = {
   standardReference: 'Procedimiento estándar de referencia', functionalImpact: 'Impacto en los usuarios', resources: 'Recursos necesarios', considerations: 'Consideraciones adicionales',
-  rolloutPlan: 'Plan de rollout', backoutPlan: 'Plan de backout', deadline: 'Fecha límite de implementación'
+  rolloutPlan: 'Plan de rollout', backoutPlan: 'Plan de backout', deadline: 'Fecha límite de implementación', releaseVersion: 'Versión a publicar (tag)'
 };
 const EVAL_LIST = { risks: 'Riesgos identificados' };
 const EVAL_ENUM = { itilType: [Object.keys(C.ITIL), 'un tipo de cambio ITIL'], impact: [C.IMPACT, 'un impacto'], urgency: [C.LEVELS, 'una urgencia'], priority: [C.LEVELS, 'una prioridad'] };
@@ -212,7 +212,9 @@ const EVAL_NUM = {};
 const EVAL_KEYS = [...Object.keys(EVAL_TEXT), ...Object.keys(EVAL_LIST), ...Object.keys(EVAL_ENUM), ...Object.keys(EVAL_NUM), 'standardSameConditions', 'affectedModules'];
 function parseEvaluation(db, data, r) {
   const e = {};
-  for (const [k, label] of Object.entries(EVAL_TEXT)) e[k] = str(data, k, { max: k === 'deadline' ? 10 : ['rolloutPlan', 'backoutPlan'].includes(k) ? 20000 : 5000, label });
+  for (const [k, label] of Object.entries(EVAL_TEXT)) e[k] = str(data, k, { max: k === 'deadline' ? 10 : k === 'releaseVersion' ? 40 : ['rolloutPlan', 'backoutPlan'].includes(k) ? 20000 : 5000, label });
+  // La versión se publica como tag «vMAJOR.MINOR.PATCH» y debe ser mayor que la versión actual del CRF.
+  if (e.releaseVersion) e.releaseVersion = `v${version(e.releaseVersion.replace(/^v/i, ''), 'Versión a publicar (tag)', 'releaseVersion', { greaterThan: r?.currentVersion })}`;
   for (const [k, label] of Object.entries(EVAL_LIST)) e[k] = list(data, k, { label });
   for (const [k, [values, label]] of Object.entries(EVAL_ENUM)) e[k] = pick(data[k], values, label, { required: false, field: k });
   for (const [k, label] of Object.entries(EVAL_NUM)) e[k] = num(data, k, { label, max: k === 'durationDays' ? 3650 : 100000 });
@@ -243,6 +245,7 @@ function missingPlanning(e) {
   need(planContent(e.rolloutPlan).length >= minimum, `${EVAL_TEXT.rolloutPlan} (describe objetivo, actividades en orden y verificaciones)`);
   need(planContent(e.backoutPlan).length >= minimum, `${EVAL_TEXT.backoutPlan} (condiciones de activación, acciones de reversión y verificación)`);
   need(e.deadline, `${EVAL_TEXT.deadline} para el desarrollador`);
+  if (e.itilType === 'Emergencia') need(e.releaseVersion, `${EVAL_TEXT.releaseVersion}: en un cambio de emergencia (hotfix) se publica directamente una versión`);
   return m;
 }
 function checkStandardReference(db, e) {
@@ -460,6 +463,18 @@ function pullRequestAction(db, r, user, data) {
   r.gitRefs.push({ id: nextId(r.gitRefs, 'GIT'), kind: 'Pull request', value: `#${number}`, url: d.url || '', note: `${head} → ${base}`, by: user.name, at: now(), verified: v?.ok === true, verification: v });
   log(db, r, user, 'Pull request', `${v?.created ? 'Creado en GitHub' : 'Registrado'}: #${number} de ${head} a ${base}${d.state ? ` (${d.state})` : ''}. ${v?.ok ? 'Verificado en GitHub.' : v?.message || 'Sin verificación en GitHub.'}`, { field: 'pull request', newValue: `#${number} ${head} → ${base}` });
 }
+// Hotfix: tras el PR se publica directamente la versión aprobada como tag en GitHub.
+function tagAction(db, r, user, data) {
+  requireAssignee(r, user);
+  requireState(r, ['En implementación']);
+  if (!r.pullRequest) fail(409, 'Crea o registra primero el pull request del hotfix.');
+  const name = r.evaluation?.releaseVersion;
+  if (!name) fail(409, 'El CCC no definió la versión a publicar.');
+  const v = data[GITHUB_RESULT] || null;
+  r.releaseTag = { name, sha: v?.details?.sha || '', from: v?.details?.from || '', url: v?.details?.url || '', created: !!v?.created, verified: v?.ok === true, verification: v, by: user.name, at: now() };
+  r.gitRefs.push({ id: nextId(r.gitRefs, 'GIT'), kind: 'Versión o tag', value: name, url: r.releaseTag.url, note: v?.details?.from ? `Publicada desde ${v.details.from}` : 'Versión del hotfix', by: user.name, at: now(), verified: v?.ok === true, verification: v });
+  log(db, r, user, 'Publicación de versión', `${v?.created ? 'Tag creado en GitHub' : 'Versión registrada'}: ${name}${v?.details?.from ? ` (desde ${v.details.from})` : ''}. ${v?.ok ? 'Verificado en GitHub.' : v?.message || 'Sin verificación en GitHub.'}`, { field: 'tag', newValue: name });
+}
 function moduleChangeAction(db, r, user, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación']);
@@ -501,6 +516,7 @@ function sendToTests(db, r, user, data) {
   if (!(r.changes || []).length) fail(409, 'Registra los módulos realmente modificados antes de enviar a pruebas.');
   if (!r.workBranch) fail(409, 'Registra la rama de trabajo antes de enviar a pruebas.');
   if (!r.pullRequest) fail(409, 'Crea o registra el pull request de la rama de trabajo antes de enviar a pruebas.');
+  if (r.evaluation?.itilType === 'Emergencia' && !r.releaseTag) fail(409, 'En un hotfix publica la versión (tag) antes de enviar a pruebas.');
   if (r.deviations.some(d => d.status === 'Pendiente')) fail(409, 'Hay desviaciones de alcance pendientes de decisión del CCC.');
   round.sentToTestsAt = now();
   transition(db, r, user, 'En pruebas', 'Envío a pruebas', str(data, 'note', { max: 2000 }) || `Ronda ${round.n} lista para pruebas.`);
@@ -588,7 +604,7 @@ function closeAction(db, r, user, data) {
     if (review.decision !== 'Conforme') fail(409, 'El cierre exitoso requiere una revisión «Conforme».');
     if (r.backouts.some(b => b.round === round)) fail(409, 'Se ejecutó un backout en esta ronda; el cierre no puede ser exitoso.');
   }
-  const resultingVersion = str(data, 'resultingVersion', { max: 40, label: 'Versión resultante' });
+  const resultingVersion = str(data, 'resultingVersion', { max: 40, label: 'Versión resultante' }) || (r.releaseTag?.name || '').replace(/^v/, '');
   version(resultingVersion, 'Versión resultante', 'resultingVersion', { greaterThan: r.currentVersion });
   r.closure = { result, administrative: 'Cerrada', by: user.name, byId: user.id, at: now(), summary: str(data, 'summary', { required: true, min: 10, max: 3000, label: 'Resumen del trabajo' }), modifications: (r.changes || []).map(c => `${c.module} · ${c.operation}: ${c.description}`), evidence: str(data, 'evidence', { max: 1000 }), testsResult: r.testRounds.at(-1)?.outcome || 'Sin pruebas', reviewResult: review.decision, gitRefs: r.gitRefs.map(g => `${g.kind}: ${g.value}${g.verified ? ' (verificada)' : ''}`), modulesModified: [...new Set((r.changes || []).map(c => c.module))], resultingVersion, justification };
   notify(r, `Solicitud cerrada con resultado ${result.toLowerCase()}.`);
@@ -619,6 +635,8 @@ function preflight(db, id, user, action, data) {
   requireAssignee(r, user);
   requireState(r, ['En implementación']);
   if (action === 'pull-request' && !r.workBranch) fail(409, 'Registra primero la rama de trabajo del cambio.');
+  if (action === 'tag' && !r.pullRequest) fail(409, 'Crea o registra primero el pull request del hotfix.');
+  if (action === 'tag' && !r.evaluation?.releaseVersion) fail(409, 'El CCC no definió la versión a publicar.');
   if (action === 'branch' && r.pullRequest && r.pullRequest.state !== 'cerrado sin fusionar') fail(409, 'La rama ya tiene un pull request; no puede reemplazarse.');
   return present(r);
 }
@@ -680,6 +698,7 @@ function mutate(db, id, action, user, data) {
     case 'git-refresh': gitRefreshAction(db, r, user, data); break;
     case 'branch': branchAction(db, r, user, data); break;
     case 'pull-request': pullRequestAction(db, r, user, data); break;
+    case 'tag': tagAction(db, r, user, data); break;
     case 'module-change': moduleChangeAction(db, r, user, data); break;
     case 'deviation': deviationAction(db, r, user, data); break;
     case 'scope': scopeAction(db, r, user, data); break;

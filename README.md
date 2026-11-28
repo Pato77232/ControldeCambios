@@ -69,6 +69,10 @@ Abre `http://127.0.0.1:3000`. Otros comandos: `docker compose logs -f control-ca
 - **No ejecutes a la vez** `npm start` y el contenedor sobre la misma carpeta de datos.
 - La imagen no incluye `.env`, `backend/data`, las pruebas ni la documentación. Se ejecuta con el usuario sin privilegios `node` y con una comprobación de salud sobre `/api/catalog`.
 
+## Publicación en un hosting
+
+InfinityFree y otros hostings solo de PHP no pueden ejecutarla. La guía para publicarla en Railway (Docker + volumen persistente), con Render y Fly.io como alternativas, está en [docs/despliegue.md](docs/despliegue.md). Detrás del proxy del hosting configura `COOKIE_SECURE=true` y `TRUST_PROXY=true`.
+
 ## Roles y cuentas
 
 | Cuenta | Perfil |
@@ -91,7 +95,9 @@ Concentrar análisis y autorización en el CCC es una simplificación académica
 - **Seguimiento paso a paso del desarrollador:** iniciar, rama de trabajo (el desarrollador escribe solo el nombre; el sistema antepone `feature/` o, en emergencias, `hotfix/` y el código del CRF), desarrollo (actividades, módulos modificados, commits), pull request de la rama de trabajo hacia la base y envío a pruebas. Modificar un módulo no autorizado genera una desviación que el CCC debe decidir.
 - **GitHub:** al aprobarse una solicitud se crea su issue, que se asigna al desarrollador, se comenta en cada hito y se cierra con el CRF. El sistema crea la rama de trabajo y el PR, o verifica los existentes. Ver [docs/github.md](docs/github.md).
 - **Ficha del CCC reducida a lo indispensable:** tipo ITIL y módulos; impacto, urgencia, prioridad y riesgos; planes de rollout y backout en Markdown; fecha límite para el desarrollador; la viabilidad técnica se indica al decidir. El CRF técnico propone el tipo ITIL y la versión actual es opcional.
-- **Panel con filtros** por fechas, usuario, estado, módulo, tipo ITIL y prioridad, y **sección de auditoría** en cada expediente.
+- **Panel con filtros** por fechas, usuario, estado, módulo, tipo ITIL y prioridad, y **sección de auditoría** en cada expediente con la rama, el PR, la versión y los commits leídos de GitHub.
+- **Panel de auditoría:** solicitudes frente a cambios realizados (cerrados con éxito); gráficos de barras y de dona por tipo (estándar, normal, emergencia, pendientes) y por estado; cambios realizados por integrante y filtro por integrante («¿cuántos cambios estándar hizo Pablo?»); estadísticas de control de versiones (ramas, PR, tags, issues y commits).
+- **Hotfix:** en un cambio de emergencia la versión es obligatoria y el desarrollador la publica directamente como tag en GitHub antes de pruebas.
 - **Pruebas, revisión y cierre** en una sola sección del expediente. Las ejecuciones de prueba se conservan y las fallidas devuelven la solicitud a correcciones.
 - **Revisión postimplementación**, **backout ejecutado** (documentado, no simulado) y **cierre** exitoso, fallido o incompleto, separado del resultado de autorización y del administrativo. El CCC puede reabrir una solicitud cerrada.
 - **Auditoría persistente** de solo inserción, un panel por rol y **reportes** con filtros, gráficos, métricas calculadas con datos reales y exportación a CSV.

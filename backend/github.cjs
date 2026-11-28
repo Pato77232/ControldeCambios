@@ -103,6 +103,34 @@ function createGithub({ repo = '', token = '', apiUrl = 'https://api.github.com'
       : detail || failure(res, 'No se pudo crear el pull request.').message;
     return { checked: true, ok: false, status: 'error', message, at: at() };
   }
+  // Publica un tag ligero: en el commit de fusión del PR si ya se fusionó; si no, en la punta de la rama de trabajo.
+  async function createTag(name, { pullNumber, branch }) {
+    if (!configured) return { checked: false, ok: false, status: 'sin configurar', message: 'GitHub no está configurado: la versión se registra sin publicar.', at: at() };
+    const existing = await call(`${repoPath}/git/ref/tags/${encodeURIComponent(name)}`);
+    if (existing.status === 200) return { checked: true, ok: true, created: false, status: 'verificada', message: `El tag ${name} ya existía en ${repo}.`, details: { sha: existing.data.object?.sha, url: `https://github.com/${repo}/releases/tag/${encodeURIComponent(name)}`, from: 'tag existente' }, at: at() };
+    if (!token) return { checked: true, ok: false, status: 'no encontrada', message: `El tag ${name} no existe en ${repo} y el token no permite crearlo.`, at: at() };
+    let sha = '', from = '';
+    if (pullNumber) { const pr = await call(`${repoPath}/pulls/${pullNumber}`); if (pr.status === 200 && pr.data.merged_at && pr.data.merge_commit_sha) { sha = pr.data.merge_commit_sha; from = `fusión del PR #${pullNumber}`; } }
+    if (!sha && branch) { const b = await call(`${repoPath}/branches/${branch.split('/').map(encodeURIComponent).join('/')}`); if (b.status === 200) { sha = b.data.commit?.sha; from = `rama ${branch}`; } }
+    if (!sha) return { checked: true, ok: false, status: 'error', message: 'No se encontró el commit para publicar la versión.', at: at() };
+    const res = await call(`${repoPath}/git/refs`, { method: 'POST', body: { ref: `refs/tags/${name}`, sha } });
+    if (res.status === 201) return { checked: true, ok: true, created: true, status: 'verificada', message: `Tag ${name} creado en ${repo}.`, details: { sha, from, url: `https://github.com/${repo}/releases/tag/${encodeURIComponent(name)}` }, at: at() };
+    const f = failure(res, 'No se pudo crear el tag.');
+    return { ...f, message: res.status === 403 ? 'El token no puede crear tags: dale el permiso «Contents: Read and write».' : f.message, at: at() };
+  }
+  // Commits de la rama de trabajo respecto de la base, leídos de GitHub (para el desarrollo y la auditoría).
+  const commitCache = new Map();
+  async function listCommits(base, head) {
+    if (!configured) return { ok: false, message: 'GitHub no está configurado.', commits: [] };
+    const key = `${base}...${head}`, cached = commitCache.get(key);
+    if (cached && Date.now() - cached.time < 60000) return cached.value;
+    const res = await call(`${repoPath}/compare/${encodeURI(base)}...${encodeURI(head)}`);
+    const value = res.status === 200
+      ? { ok: true, status: res.data.status, aheadBy: res.data.ahead_by, url: res.data.html_url, commits: (res.data.commits || []).map(c => ({ sha: c.sha, short: c.sha.slice(0, 7), message: String(c.commit?.message || '').split('\n')[0].slice(0, 200), author: c.author?.login || c.commit?.author?.name || '', date: c.commit?.author?.date || '', url: c.html_url })).reverse() }
+      : { ok: false, message: failure(res, `La rama ${head} ya no existe en ${repo} (pudo eliminarse tras fusionar el PR).`).message, commits: [] };
+    commitCache.set(key, { time: Date.now(), value });
+    return value;
+  }
   async function status() {
     if (!configured) return { configured: false, repo: repo || null, canCreateIssues: false, message: 'Define GITHUB_REPO=propietario/repositorio en .env para activar la integración.' };
     if (statusCache && Date.now() - statusCache.time < 60000) return statusCache.value;
@@ -161,10 +189,10 @@ function createGithub({ repo = '', token = '', apiUrl = 'https://api.github.com'
     }
     return { ok: !warning, issue: issueRef(update.data), message: `Issue #${issue.number} sincronizada (${statusLabel(r.status)}).${warning}` };
   }
-  return { configured, repo, verify, status, createIssue, syncIssue, createBranch, createPull, canIssue: () => configured && !!token };
+  return { configured, repo, verify, status, createIssue, syncIssue, createBranch, createPull, createTag, listCommits, canIssue: () => configured && !!token };
 }
 // Comentario para la issue a partir del último evento del historial (sin datos personales del solicitante).
-const MILESTONES = ['Rama de trabajo', 'Pull request', 'Recepción del CRF', 'Inicio del análisis', 'Solicitud de información adicional', 'Respuesta del iniciador', 'Planificación completada', 'Aprobación', 'Aprobación condicionada', 'Rechazo', 'Reevaluación', 'Asignación', 'Reasignación', 'Inicio de implementación', 'Inicio de correcciones', 'Envío a pruebas', 'Resultado de pruebas', 'Revisión postimplementación', 'Cierre', 'Cierre administrativo', 'Reapertura', 'Decisión de alcance'];
+const MILESTONES = ['Rama de trabajo', 'Pull request', 'Publicación de versión', 'Recepción del CRF', 'Inicio del análisis', 'Solicitud de información adicional', 'Respuesta del iniciador', 'Planificación completada', 'Aprobación', 'Aprobación condicionada', 'Rechazo', 'Reevaluación', 'Asignación', 'Reasignación', 'Inicio de implementación', 'Inicio de correcciones', 'Envío a pruebas', 'Resultado de pruebas', 'Revisión postimplementación', 'Cierre', 'Cierre administrativo', 'Reapertura', 'Decisión de alcance'];
 function pullDetails(d) {
   return { number: d.number, title: String(d.title || '').slice(0, 200), state: d.merged_at ? 'fusionado' : d.state === 'open' ? (d.draft ? 'borrador' : 'abierto') : 'cerrado sin fusionar', merged: !!d.merged_at, mergedAt: d.merged_at, head: d.head?.ref, base: d.base?.ref, url: d.html_url };
 }

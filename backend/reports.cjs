@@ -53,4 +53,36 @@ function csv(rows) {
   const cell = v => { const s = Array.isArray(v) ? v.join(' ') : String(v ?? ''); const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s; return `"${safe.replace(/"/g, '""')}"`; };
   return '﻿' + [cols.map(c => cell(c[1])).join(';'), ...rows.map(r => cols.map(c => cell(r[c[0]])).join(';'))].join('\r\n');
 }
-module.exports = { report, csv };
+// ---------- Panel de auditoría ----------
+// Distingue solicitudes (todo lo registrado) de cambios realizados (cerrados con resultado exitoso),
+// y resume el control de versiones (ramas, PR, tags, commits leídos de GitHub).
+const TYPES = ['Estándar', 'Normal', 'Emergencia'];
+const PENDING = 'Pendiente de clasificar';
+function auditDashboard(db, user, { developer = '', from = '', to = '' } = {}) {
+  const docs = allVisible(db, user).map(x => x.r).filter(r => (!from || r.date >= from) && (!to || r.date <= to));
+  const typeOf = r => r.evaluation?.itilType || PENDING;
+  const devOf = r => (currentAssignment(r) || r.assignments?.at(-1))?.developerName || '';
+  const devIdOf = r => (currentAssignment(r) || r.assignments?.at(-1))?.developerId || '';
+  const done = docs.filter(r => r.closure?.result === 'Exitoso');
+  const inProgress = docs.filter(r => r.status !== 'Cerrada' && ['Aprobado', 'Aprobado con condiciones'].includes(currentAuthorization(r)?.decision));
+  const byType = list => Object.fromEntries([...TYPES, PENDING].map(t => [t, list.filter(r => typeOf(r) === t).length]));
+  const team = db.prepare("SELECT id,name FROM users WHERE active=1 AND role='experto' ORDER BY name").all();
+  const people = team.map(u => {
+    const mine = done.filter(r => devIdOf(r) === u.id);
+    return { id: u.id, name: u.name, requested: docs.filter(r => r.ownerId === u.id).length, assigned: docs.filter(r => (r.assignments || []).some(a => a.developerId === u.id)).length, done: mine.length, ...Object.fromEntries(TYPES.map(t => [t, mine.filter(r => typeOf(r) === t).length])) };
+  });
+  const selected = developer ? people.find(p => p.id === developer) || null : null;
+  const scoped = developer ? docs.filter(r => devIdOf(r) === developer) : docs;
+  const prs = docs.filter(r => r.pullRequest);
+  return {
+    totals: { requests: docs.length, done: done.length, failed: docs.filter(r => ['Fallido', 'Incompleto'].includes(r.closure?.result)).length, inProgress: inProgress.length, rejected: docs.filter(r => (r.decisions || []).some(d => d.kind === 'Autorización' && d.decision === 'Rechazado') && !r.closure?.result).length, pending: docs.filter(r => typeOf(r) === PENDING && r.status !== 'Cerrada').length },
+    requestsByType: byType(scoped), doneByType: byType(developer ? done.filter(r => devIdOf(r) === developer) : done),
+    resultBreakdown: ['Exitoso', 'Fallido', 'Incompleto'].map(k => ({ label: k, value: scoped.filter(r => r.closure?.result === k).length })).concat([{ label: 'Rechazada', value: scoped.filter(r => r.closure && !r.closure.result).length }, { label: 'En curso', value: scoped.filter(r => r.status !== 'Cerrada').length }]),
+    people, selected,
+    versionControl: { branches: docs.filter(r => r.workBranch).length, branchesCreated: docs.filter(r => r.workBranch?.created).length, pullRequests: prs.length, merged: prs.filter(r => r.pullRequest.state === 'fusionado').length, open: prs.filter(r => ['abierto', 'borrador'].includes(r.pullRequest.state)).length, tags: docs.filter(r => r.releaseTag).length, issues: docs.filter(r => r.github?.issue).length, commitsRegistered: docs.reduce((n, r) => n + (r.gitRefs || []).filter(g => g.kind === 'Commit').length, 0) },
+    changes: done.map(r => ({ id: r.id, title: r.title, type: typeOf(r), developer: devOf(r), closedAt: r.closure.at, branch: r.workBranch?.name || '', pr: r.pullRequest ? `#${r.pullRequest.number}` : '', tag: r.releaseTag?.name || r.closure.resultingVersion || '' })).filter(x => !developer || done.find(r => r.id === x.id && devIdOf(r) === developer)),
+    branches: docs.filter(r => r.workBranch).map(r => ({ id: r.id, branch: r.workBranch.name, base: r.workBranch.base })),
+    types: [...TYPES, PENDING]
+  };
+}
+module.exports = { report, csv, auditDashboard };

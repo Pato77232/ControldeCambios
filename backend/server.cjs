@@ -13,7 +13,7 @@ const { HttpError, fail } = S;
 
 const ROOT = path.resolve(__dirname, '..');
 const STATIC = new Map([['/', 'index.html'], ['/index.html', 'index.html'], ['/wireframe.html', 'wireframe.html'], ['/js/app.js', 'js/app.js'], ['/js/print.js', 'js/print.js'], ['/css/styles.css', 'css/styles.css']]);
-const ACTIONS = ['receive', 'validate', 'request-info', 'clarification', 'evaluation', 'decision', 'reevaluate', 'assign', 'start', 'activity', 'git', 'git-refresh', 'branch', 'pull-request', 'module-change', 'deviation', 'scope', 'send-to-tests', 'test', 'finish-tests', 'backout', 'review', 'close', 'close-rejected', 'reopen'];
+const ACTIONS = ['receive', 'validate', 'request-info', 'clarification', 'evaluation', 'decision', 'reevaluate', 'assign', 'start', 'activity', 'git', 'git-refresh', 'branch', 'pull-request', 'tag', 'module-change', 'deviation', 'scope', 'send-to-tests', 'test', 'finish-tests', 'backout', 'review', 'close', 'close-rejected', 'reopen'];
 const KB = 1024, MB = 1024 * KB;
 async function readJson(req, limit = 200 * KB) {
   if (!String(req.headers['content-type'] || '').startsWith('application/json')) fail(415, 'Se requiere application/json.');
@@ -40,7 +40,7 @@ function catalog() {
 function pullBody(r) {
   return [`Cambio **${r.id}** autorizado por el CCC en el Sistema de Control de Cambios.`, r.github?.issue ? `\nRefs #${r.github.issue.number}` : '', `\n**Módulos:** ${(r.modules || []).join(', ')}`, `\n### Cambio solicitado\n${r.description || ''}`, r.acceptanceCriteria?.length ? `\n### Criterios de aceptación\n${r.acceptanceCriteria.map(c => `- [ ] ${c}`).join('\n')}` : ''].join('\n');
 }
-function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'data', 'changeflow.sqlite'), seedPassword = process.env.SEED_PASSWORD, secureCookies = process.env.COOKIE_SECURE === 'true', initialUsers, github = createGithub({ repo: process.env.GITHUB_REPO, token: process.env.GITHUB_TOKEN, apiUrl: process.env.GITHUB_API_URL }), appUrl = process.env.APP_URL || '' } = {}) {
+function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'data', 'changeflow.sqlite'), seedPassword = process.env.SEED_PASSWORD, secureCookies = process.env.COOKIE_SECURE === 'true', initialUsers, github = createGithub({ repo: process.env.GITHUB_REPO, token: process.env.GITHUB_TOKEN, apiUrl: process.env.GITHUB_API_URL }), appUrl = process.env.APP_URL || '', trustProxy = process.env.TRUST_PROXY === 'true' } = {}) {
   const db = openDatabase(filename);
   try { seedUsers(db, seedPassword, initialUsers); } catch (e) { db.close(); throw e; }
   const loginLimit = limiter(10, 15 * 60 * 1000), publicLimit = limiter(20, 60 * 60 * 1000), trackLimit = limiter(30, 60 * 60 * 1000);
@@ -76,7 +76,8 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const json = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); };
     try {
-      const url = new URL(req.url, 'http://localhost'), route = url.pathname, method = req.method, ip = req.socket.remoteAddress;
+      const url = new URL(req.url, 'http://localhost'), route = url.pathname, method = req.method;
+      const ip = trustProxy && req.headers['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',')[0].trim() : req.socket.remoteAddress;
       if (!route.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method)) fail(405, 'Método no permitido.');
         const file = STATIC.get(route); if (!file) fail(404, 'Página no encontrada.');
@@ -87,7 +88,9 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
       const mutation = !['GET', 'HEAD'].includes(method);
       if (mutation) {
         const origin = req.headers.origin;
-        if (origin && origin !== `${secureCookies ? 'https' : 'http'}://${req.headers.host}`) fail(403, 'Origen no permitido.');
+        // Detrás del proxy del hosting (TRUST_PROXY=true) el host público llega en X-Forwarded-Host.
+        const host = trustProxy && req.headers['x-forwarded-host'] ? String(req.headers['x-forwarded-host']).split(',')[0].trim() : req.headers.host;
+        if (origin && origin !== `${secureCookies ? 'https' : 'http'}://${host}`) fail(403, 'Origen no permitido.');
       }
       // ---------- Rutas sin sesión ----------
       if (route === '/api/catalog' && method === 'GET') { json(200, catalog()); return; }
@@ -140,6 +143,11 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
       if (m) {
         const [, id, action] = m;
         if (!action && method === 'GET') { json(200, S.requestDetail(db, id, user)); return; }
+        if (action === 'github-commits' && method === 'GET') {
+          const r = S.requestDetail(db, id, user).request;
+          if (!r.workBranch) { json(200, { ok: false, message: 'Todavía no hay rama de trabajo.', commits: [] }); return; }
+          json(200, await github.listCommits(r.workBranch.base, r.workBranch.name)); return;
+        }
         if (action === 'attachments' && method === 'POST') { const data = await readJson(req, 12 * MB); const r = tx(() => S.uploadAttachments(db, id, user, data)); json(200, { request: r, store: store() }); return; }
         if (action === 'github-issue' && method === 'POST') {
           if (user.role !== 'ccc') fail(403, 'Solo el CCC gestiona la issue de GitHub.');
@@ -173,6 +181,11 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
             const result = input.create ? await github.createBranch(input.name, input.base) : await github.verify('Rama', input.name);
             if (input.create && !result.ok) fail(result.status === 'sin configurar' ? 409 : 400, result.message, 'name');
             if (!input.create && result.status === 'no encontrada') fail(400, `La rama «${input.name}» no existe en ${github.repo}. Créala con ese nombre (el token no permite crearla).`, 'name');
+            data[S.GITHUB_RESULT] = result;
+          } else if (name === 'tag') {
+            const current = S.preflight(db, id, user, name, data);
+            const result = await github.createTag(current.evaluation.releaseVersion, { pullNumber: current.pullRequest.number, branch: current.workBranch?.name });
+            if (github.configured && !result.ok) fail(result.status === 'no encontrada' ? 409 : 400, result.message, 'tag');
             data[S.GITHUB_RESULT] = result;
           } else if (name === 'pull-request') {
             const current = S.preflight(db, id, user, name, data);
@@ -209,9 +222,21 @@ function createApp({ filename = process.env.DB_PATH || path.join(__dirname, 'dat
         if (route.endsWith('.csv')) { res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="reporte-cambios.csv"', 'Cache-Control': 'no-store' }); res.end(R.csv(data.rows)); return; }
         json(200, data); return;
       }
+      if (route === '/api/audit/dashboard' && method === 'GET') {
+        const filters = Object.fromEntries(['developer', 'from', 'to'].map(k => [k, String(url.searchParams.get(k) || '').slice(0, 100)]));
+        const data = R.auditDashboard(db, user, filters);
+        // Commits reales de cada rama de trabajo, leídos de GitHub (con caché breve).
+        let commits = null;
+        if (github.configured && data.branches.length) {
+          const results = [];
+          for (let i = 0; i < data.branches.length; i += 4) results.push(...await Promise.all(data.branches.slice(i, i + 4).map(b => github.listCommits(b.base, b.branch).then(x => ({ ...b, ...x })))));
+          commits = { total: results.reduce((n, x) => n + (x.commits?.length || 0), 0), perBranch: results.map(x => ({ id: x.id, branch: x.branch, count: x.commits?.length || 0, ok: x.ok, message: x.ok ? '' : x.message })) };
+        }
+        json(200, { ...data, commits, github: github.configured ? github.repo : null }); return;
+      }
       if (route === '/api/audit' && method === 'GET') {
         const visible = new Set(S.allVisible(db, user).map(x => x.r.id));
-        json(200, { events: listAudit(db, { entityType: url.searchParams.get('entityType') || '', action: url.searchParams.get('action') || '', entityIds: user.role === 'ccc' ? null : visible }) }); return;
+        json(200, { events: listAudit(db, { entityType: url.searchParams.get('entityType') || '', entityId: (url.searchParams.get('entityId') || '').slice(0, 20), action: url.searchParams.get('action') || '', entityIds: user.role === 'ccc' ? null : visible }) }); return;
       }
       fail(404, 'Ruta no encontrada.');
     } catch (error) {

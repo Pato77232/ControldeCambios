@@ -342,7 +342,11 @@ test('ejecución: asignación, implementación, desviación, pruebas fallidas, r
     // Cierre fallido con backout y cierre incompleto.
     const f = (await t.leslie.call('/api/requests', 'POST', devCrf())).data.request.id;
     await t.david.ok(f, 'receive'); await t.david.ok(f, 'validate');
-    await t.david.ok(f, 'evaluation', { ...fullPlan(), itilType: 'Emergencia', rolloutPlan: '1. Aplicar el parche urgente', backoutPlan: '1. Revertir el despliegue', step: 'planning' });
+    const noVersion = await t.david.act(f, 'evaluation', { ...fullPlan(), itilType: 'Emergencia', rolloutPlan: '1. Aplicar el parche urgente', backoutPlan: '1. Revertir el despliegue', step: 'planning' });
+    assert.equal(noVersion.status, 400); assert.match(noVersion.data.error, /Versión a publicar/, 'en emergencia la versión es obligatoria');
+    assert.equal((await t.david.act(f, 'evaluation', { ...fullPlan(), itilType: 'Emergencia', releaseVersion: '1.2.x', step: 'draft' })).data.field, 'releaseVersion');
+    const emergency = await t.david.ok(f, 'evaluation', { ...fullPlan(), itilType: 'Emergencia', releaseVersion: '1.2.1', rolloutPlan: '1. Aplicar el parche urgente', backoutPlan: '1. Revertir el despliegue', step: 'planning' });
+    assert.equal(emergency.evaluation.releaseVersion, 'v1.2.1', 'se normaliza como tag');
     await t.david.ok(f, 'decision', { feasibility: 'Viable', decision: 'Aprobado', justification: 'Emergencia autorizada.' });
     await t.david.ok(f, 'assign', { developerId: 'team-shirley' });
     await t.shirley.ok(f, 'start');
@@ -351,6 +355,9 @@ test('ejecución: asignación, implementación, desviación, pruebas fallidas, r
     const hotfix = await t.shirley.ok(f, 'branch', { name: 'parche urgente' });
     assert.equal(hotfix.workBranch.name, `hotfix/${f}-parche-urgente`, 'emergencia: hotfix/');
     await t.shirley.ok(f, 'pull-request', { number: 9 });
+    assert.equal((await t.shirley.act(f, 'send-to-tests')).status, 409, 'el hotfix publica la versión antes de pruebas');
+    const tagged = await t.shirley.ok(f, 'tag');
+    assert.equal(tagged.releaseTag.name, 'v1.2.1'); assert.equal(tagged.releaseTag.verified, false);
     await t.shirley.ok(f, 'send-to-tests');
     await t.leslie.ok(f, 'test', { name: 'Ventas', expected: 'OK', obtained: 'Falla', status: 'Fallida' });
     await t.leslie.ok(f, 'finish-tests', { outcome: 'Existen fallos', incident: 'El parche rompe el pago.', next: 'Revisión' });
@@ -394,6 +401,11 @@ test('auditoría, adjuntos y reportes: eventos inmutables, acceso protegido y CS
     const csv = await t.david.call('/api/reports.csv');
     assert.equal(csv.status, 200); assert.match(csv.headers.get('content-type'), /text\/csv/); assert.match(csv.data.toString(), /"Código";"Fecha";"Título"/);
     assert.equal((await t.ana.call('/api/reports')).status, 403);
+    const filtered = (await t.david.call(`/api/audit?entityId=${r.id.toLowerCase()}`)).data.events;
+    assert.ok(filtered.length > 0 && filtered.every(e => e.entity_id === r.id), 'filtro de auditoría por código de CRF');
+    const dash = (await t.david.call('/api/audit/dashboard')).data;
+    assert.equal(dash.totals.requests, 1); assert.equal(dash.totals.done, 0); assert.equal(dash.totals.pending, 1);
+    assert.equal(dash.requestsByType['Pendiente de clasificar'], 1); assert.equal(dash.commits, null, 'sin GitHub no se inventan commits');
   } finally { await stop(app); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -469,7 +481,7 @@ test('equipo y persistencia: sincronización de cuentas y datos conservados al r
 
 // ---------- GitHub (API simulada) ----------
 function mockGithub() {
-  const state = { issues: [], comments: [], calls: [], branches: { main: 'm'.repeat(40), 'feature/x': 'a'.repeat(40) }, pulls: { 4: { number: 4, title: 'Cancelación de boletos', state: 'closed', merged_at: '2026-11-20T10:00:00Z', head: { ref: 'feature/x' }, base: { ref: 'main' } }, 5: { number: 5, title: 'Ajuste', state: 'open', merged_at: null, draft: false, head: { ref: 'fix' }, base: { ref: 'main' } } } };
+  const state = { tags: { 'v1.3.0': 'b'.repeat(40) }, issues: [], comments: [], calls: [], branches: { main: 'm'.repeat(40), 'feature/x': 'a'.repeat(40) }, pulls: { 4: { number: 4, title: 'Cancelación de boletos', state: 'closed', merged_at: '2026-11-20T10:00:00Z', head: { ref: 'feature/x' }, base: { ref: 'main' } }, 5: { number: 5, title: 'Ajuste', state: 'open', merged_at: null, draft: false, head: { ref: 'fix' }, base: { ref: 'main' } } } };
   const send = (res, status, data) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(data === undefined ? '' : JSON.stringify(data)); };
   const server = http.createServer(async (req, res) => {
     let body = ''; for await (const c of req) body += c;
@@ -481,12 +493,13 @@ function mockGithub() {
     let m;
     if ((m = /^\/repos\/org\/busesuta\/branches\/(.+)$/.exec(url))) return state.branches[m[1]] ? send(res, 200, { name: m[1], commit: { sha: state.branches[m[1]] }, _links: { html: `https://github.com/org/busesuta/tree/${m[1]}` } }) : send(res, 404, { message: 'Branch not found' });
     if ((m = /^\/repos\/org\/busesuta\/git\/ref\/heads\/(.+)$/.exec(url))) return state.branches[m[1]] ? send(res, 200, { object: { sha: state.branches[m[1]] } }) : send(res, 404, { message: 'Not Found' });
-    if (url === `${base}/git/refs` && req.method === 'POST') { state.branches[data.ref.replace('refs/heads/', '')] = data.sha; return send(res, 201, { ref: data.ref }); }
+    if (url === `${base}/git/refs` && req.method === 'POST') { if (data.ref.startsWith('refs/tags/')) state.tags[data.ref.replace('refs/tags/', '')] = data.sha; else state.branches[data.ref.replace('refs/heads/', '')] = data.sha; return send(res, 201, { ref: data.ref }); }
+    if ((m = /^\/repos\/org\/busesuta\/compare\/(.+)\.\.\.(.+)$/.exec(url))) return state.branches[m[2]] ? send(res, 200, { status: 'ahead', ahead_by: 2, html_url: `https://github.com/org/busesuta/compare/${m[1]}...${m[2]}`, commits: [{ sha: 'c1'.repeat(20), html_url: 'https://github.com/org/busesuta/commit/c1', commit: { message: 'Primer commit\n\ndetalle', author: { name: 'Edwin', date: '2026-11-20T09:00:00Z' } }, author: { login: 'EdwinGH' } }, { sha: 'c2'.repeat(20), html_url: 'https://github.com/org/busesuta/commit/c2', commit: { message: 'Segundo commit', author: { name: 'Edwin', date: '2026-11-20T10:00:00Z' } }, author: { login: 'EdwinGH' } }] }) : send(res, 404, { message: 'Not Found' });
     if (url === `${base}/commits/abc1234`) return send(res, 200, { sha: 'abc1234' + '0'.repeat(33), html_url: 'https://github.com/org/busesuta/commit/abc1234', commit: { message: 'Cancelación\n\ndetalle', author: { name: 'Edwin', date: '2026-11-20T09:00:00Z' } } });
     if (url.startsWith(`${base}/pulls?`)) { const q = new URLSearchParams(url.split('?')[1]); return send(res, 200, Object.values(state.pulls).filter(p => p.state === 'open' && `org:${p.head.ref}` === q.get('head') && p.base.ref === q.get('base')).map(p => ({ ...p, html_url: `https://github.com/org/busesuta/pull/${p.number}` }))); }
     if (url === `${base}/pulls` && req.method === 'POST') { if (!state.branches[data.head]) return send(res, 422, { message: 'Validation Failed', errors: [{ message: 'head no existe' }] }); const n = 100 + Object.keys(state.pulls).length; state.pulls[n] = { number: n, title: data.title, body: data.body, state: 'open', merged_at: null, head: { ref: data.head }, base: { ref: data.base } }; return send(res, 201, { ...state.pulls[n], html_url: `https://github.com/org/busesuta/pull/${n}` }); }
     if ((m = /\/pulls\/(\d+)$/.exec(url)) && state.pulls[m[1]]) return send(res, 200, { ...state.pulls[m[1]], html_url: `https://github.com/org/busesuta/pull/${m[1]}` });
-    if (url === `${base}/git/ref/tags/v1.3.0`) return send(res, 200, { object: { sha: 'b'.repeat(40) } });
+    if ((m = /^\/repos\/org\/busesuta\/git\/ref\/tags\/(.+)$/.exec(url))) return state.tags[m[1]] ? send(res, 200, { object: { sha: state.tags[m[1]] } }) : send(res, 404, { message: 'Not Found' });
     if (url === `${base}/issues` && req.method === 'POST') { const issue = { number: state.issues.length + 1, html_url: `https://github.com/org/busesuta/issues/${state.issues.length + 1}`, state: 'open', created_at: '2026-11-19T00:00:00Z', assignees: [], ...data, labels: data.labels.map(name => ({ name })) }; state.issues.push(issue); return send(res, 201, issue); }
     const issue = /\/issues\/(\d+)(\/comments)?$/.exec(url);
     if (issue) {
@@ -560,7 +573,9 @@ test('GitHub: issue al aprobar, asignación, rama y PR del cambio, y verificaci�
     assert.equal(pr.pullRequest.created, true); assert.equal(pr.pullRequest.head, name); assert.equal(pr.pullRequest.base, 'main'); assert.equal(pr.pullRequest.state, 'abierto');
     const created = gh.state.pulls[pr.pullRequest.number];
     assert.equal(created.title, `[${id}] Cancelación técnica`); assert.match(created.body, /Refs #1/);
-    gh.state.pulls[pr.pullRequest.number] = { ...created, state: 'closed', merged_at: '2026-11-21T00:00:00Z' };
+    gh.state.pulls[pr.pullRequest.number] = { ...created, state: 'closed', merged_at: '2026-11-21T00:00:00Z', merge_commit_sha: 'f'.repeat(40) };
+    const commits = (await t.david.call(`/api/requests/${id}/github-commits`)).data;
+    assert.equal(commits.ok, true); assert.deepEqual(commits.commits.map(c => c.message), ['Segundo commit', 'Primer commit']);
     const refreshed = await t.pablo.ok(id, 'git-refresh', { refId: pr.gitRefs.find(g => g.kind === 'Pull request').id });
     assert.equal(refreshed.pullRequest.state, 'fusionado');
     // El cierre cierra la issue como completada.
@@ -572,6 +587,22 @@ test('GitHub: issue al aprobar, asignación, rama y PR del cambio, y verificaci�
     await t.pablo.ok(id, 'review', { summary: 'Conforme con lo autorizado.', rolloutCompliance: 'Cumplido', criteria: (await t.pablo.call(`/api/requests/${id}`)).data.reviewCriteria.map(() => ({ met: true })), recommendation: 'Cerrar.', decision: 'Conforme' });
     await t.edwin.ok(id, 'close', { result: 'Exitoso', summary: 'Cancelación disponible.' });
     assert.equal(issue.state, 'closed'); assert.equal(issue.state_reason, 'completed'); assert.ok(issue.labels.some(l => l.name === 'estado: cerrada'));
+    const dash = (await t.david.call('/api/audit/dashboard?developer=team-edwin')).data;
+    assert.equal(dash.selected.name, 'Edwin'); assert.equal(dash.selected.done, 1); assert.equal(dash.selected['Normal'], 1);
+    assert.equal(dash.commits.total, 2, 'commits leídos de GitHub'); assert.equal(dash.versionControl.merged, 1);
+    // Hotfix: la versión se publica como tag en GitHub desde el commit de fusión del PR.
+    const hf = (await t.leslie.call('/api/requests', 'POST', devCrf({ title: 'Hotfix de pagos', currentVersion: '1.2.0' }))).data.request.id;
+    await t.david.ok(hf, 'receive'); await t.david.ok(hf, 'validate');
+    await t.david.ok(hf, 'evaluation', { ...fullPlan(), itilType: 'Emergencia', releaseVersion: 'v1.2.1', step: 'planning' });
+    await t.david.ok(hf, 'decision', { feasibility: 'Viable', decision: 'Aprobado' });
+    await t.david.ok(hf, 'assign', { developerId: 'team-edwin' });
+    await t.edwin.ok(hf, 'start');
+    const hb = await t.edwin.ok(hf, 'branch', { name: 'pagos' });
+    assert.equal(hb.workBranch.name, `hotfix/${hf}-pagos`);
+    const hpr = await t.edwin.ok(hf, 'pull-request', { mode: 'create' });
+    gh.state.pulls[hpr.pullRequest.number] = { ...gh.state.pulls[hpr.pullRequest.number], state: 'closed', merged_at: '2026-11-22T00:00:00Z', merge_commit_sha: 'e'.repeat(40) };
+    const tag = await t.edwin.ok(hf, 'tag');
+    assert.equal(tag.releaseTag.name, 'v1.2.1'); assert.equal(tag.releaseTag.created, true); assert.equal(gh.state.tags['v1.2.1'], 'e'.repeat(40), 'tag en el commit de fusión');
     // Un responsable sin acceso al repositorio no bloquea la sincronización: se informa.
     const other = (await t.leslie.call('/api/requests', 'POST', devCrf({ title: 'Otro cambio' }))).data.request.id;
     await t.david.ok(other, 'receive'); await t.david.ok(other, 'validate');
@@ -596,5 +627,22 @@ test('GitHub no disponible: el flujo sigue y la issue puede reintentarse', async
     assert.equal(retry.status, 502); assert.match(retry.data.error, /GitHub/);
     assert.equal(createGithub({ repo: 'org/busesuta' }).canIssue(), false);
     assert.equal((await createGithub({}).verify('Rama', 'main')).status, 'sin configurar');
+  } finally { await stop(app); }
+});
+test('hosting detrás de un proxy: origen público, cookie segura e IP real para los límites', async () => {
+  const app = await start(':memory:', { secureCookies: true, trustProxy: true });
+  try {
+    const headers = ip => ({ Origin: 'https://cambios.example', 'X-Forwarded-Host': 'cambios.example', 'X-Forwarded-For': ip });
+    const ok = await fetch(`${app.url}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers('203.0.113.1') }, body: JSON.stringify({ email: 'david@uta.edu.ec', password: PASSWORD }) });
+    assert.equal(ok.status, 200, 'el origen público se acepta detrás del proxy');
+    assert.match(ok.headers.get('set-cookie'), /Secure/);
+    const foreign = await fetch(`${app.url}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers('203.0.113.1'), Origin: 'https://otro.example' }, body: JSON.stringify({ email: 'x', password: 'y' }) });
+    assert.equal(foreign.status, 403);
+    // Los intentos fallidos se cuentan por IP real: bloquear una IP no bloquea a las demás.
+    for (let i = 0; i < 10; i++) await fetch(`${app.url}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers('203.0.113.9') }, body: JSON.stringify({ email: 'david@uta.edu.ec', password: 'incorrecta' }) });
+    const blocked = await fetch(`${app.url}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers('203.0.113.9') }, body: JSON.stringify({ email: 'david@uta.edu.ec', password: PASSWORD }) });
+    assert.equal(blocked.status, 429);
+    const other = await fetch(`${app.url}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers('203.0.113.2') }, body: JSON.stringify({ email: 'david@uta.edu.ec', password: PASSWORD }) });
+    assert.equal(other.status, 200);
   } finally { await stop(app); }
 });
